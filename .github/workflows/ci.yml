@@ -1,0 +1,29 @@
+# 単体テストと Zero-Exec 検証（strace）。外部 Action はコミット SHA で固定。
+# Python はランナー標準（ubuntu-24.04 は 3.12。要件は 3.11 以上）を使い、追加の Action を増やさない。
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: strace（Zero-Exec 検証に必須）
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace
+      - name: python バージョン（3.11 以上）
+        run: python3 -I -c 'import sys; print(sys.version); assert sys.version_info >= (3, 11)'
+      - name: tests
+        run: |
+          tests/run-tests.sh | tee "$RUNNER_TEMP/out.txt"
+          # strace が使えず SKIP した場合は合格扱いにしない
+          ! grep -q '^SKIP' "$RUNNER_TEMP/out.txt"
