@@ -1,0 +1,12 @@
+{
+  "name": "brand",
+  "private": true,
+  "type": "module",
+  "description": "ブランド資産の生成（fresnel の Liquid Glass アイコン形式）。生成物はコミット済み",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "fresnel-icon": "0.2.2"
+  }
+}

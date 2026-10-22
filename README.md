@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/logo/ger-logo-dark.svg">
+    <img src="brand/logo/ger-logo-light.svg" alt="gated-exec remediation" height="72">
+  </picture>
+</p>
+
 # gated-exec-remediation（GER）
 
 **Gated-Exec Remediation** — [Zero-Exec Shield（ZES）](https://github.com/kajisho5/zero-exec-shield) の修復層です。[ZET（zero-exec-triage）](https://github.com/kajisho5/zero-exec-triage) が確定した修復計画を、すべてのゲートを通過した場合にだけ実行します。3 層で唯一、変更を行う層です。
