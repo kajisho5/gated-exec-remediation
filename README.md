@@ -83,3 +83,7 @@ tests/run-tests.sh   # 単体テスト（22 件。一時ディレクトリの実
 ```
 
 root で実行すると「読めないファイル（0000）」のテストは SKIP になります（一般ユーザーでは 22 件すべて実行）。ZET が確定した実際の計画（`tests/fixtures/zet-final-plan.json`）で、スキーマと plan_hash の互換性も確認しています。
+
+## ライセンス
+
+[Apache License 2.0](LICENSE)。脆弱性の報告は [SECURITY.md](SECURITY.md) を参照してください。
