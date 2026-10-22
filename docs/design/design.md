@@ -1,6 +1,6 @@
 # GER（Gated-Exec Remediation）詳細設計書 — Step 1
 
-- **版**: 設計 0.1（2026-10-22）／ 実装前レビュー用
+- **版**: 設計 0.1（2026-10-22）／ 2026-10-22 承認（C-1〜C-6 を採用）、実装 0.1.0
 - **層**: 修復層（ZES → ZET の後段。3 層で唯一、変更を実行する）
 - **原則**: Gated-Exec。すべてのゲートを通過した操作だけを、計画に書かれた対象にだけ、冪等に実行する
 - **上位文書**: [ZES スキル契約書](https://github.com/kajisho5/zero-exec-shield/blob/claude/zes-v5.2-skillpact/docs/skill-contracts.md)（§1, §5〜§8）、[ZET 設計書](https://github.com/kajisho5/zero-exec-triage/blob/claude/zet-design/docs/design/design.md)
@@ -97,34 +97,32 @@ ZET が確定した修復計画を、人間の明示承認を受けたうえで�
 
 ---
 
-## 6. 構成
+## 6. 構成（実装に合わせて更新）
 
 ```
 gated-exec-remediation/
 ├── SKILL.md                          # エージェント向け手順（承認を代行しない、apply 前に必ず dry-run）
-├── ger                               # 起動スクリプト（python3 -I で ger/cli.py）
+├── bin/ger                           # 起動スクリプト（bash 組み込みのみでパス解決し python3 -I で起動）
 ├── ger/
-│   ├── cli.py                        # 引数・終了コード・--operator 必須
-│   ├── validate.py                   # strict スキーマ検証（標準ライブラリ）
-│   ├── gates.py                      # G-1〜G-8
-│   ├── actions/
-│   │   ├── __init__.py               # 操作レジストリ（未登録の type は G-5 で拒否）
-│   │   └── chmod.py                  # plan()/apply()/rollback()/verify()
-│   ├── executor.py                   # 実行・ロールバック
-│   ├── audit.py                      # 追記専用ログ＋ハッシュチェーン
-│   └── canonical.py                  # 正規化 JSON と plan_hash
-├── schemas/
-│   ├── ger-input.schema.json
-│   ├── remediation-log.schema.json   # GER が所有
-│   └── vendor/remediation-plan.schema.json   # ZET から版固定で取り込んだ写し
-├── tests/
-│   ├── fixtures/                     # plan / approval の合格・拒否サンプル
-│   ├── test_gates.py / test_chmod.py / test_executor.py / test_audit.py
-│   └── run-tests.sh
+│   ├── __main__.py / cli.py          # 引数・終了コード・--operator 必須・監査ログ記録
+│   ├── gates.py                      # G-1〜G-8（変更を一切行わない）
+│   ├── executor.py                   # dry-run / apply / 全件ロールバック
+│   ├── actions/{__init__.py, chmod.py}   # 操作レジストリ（未登録の type は G-5 で拒否）
+│   ├── audit.py                      # 追記専用ログ＋ハッシュチェーン＋dry-run 記録の検索
+│   ├── core.py                       # 正規化 JSON・plan_hash / input_hash・原子的書き出し
+│   └── jsonschema_lite.py            # ZET と同一の検証器（VENDOR.json で版固定）
+├── schemas/{ger-input, remediation-log}.schema.json
+├── schemas/vendor/{remediation-plan.schema.json, VENDOR.json}
+├── tests/{run.py, run-tests.sh, test_ger.py, fixtures/zet-final-plan.json}
 ├── docs/design/{design.md, flow.svg}
 ├── README.md
 └── CHANGELOG.md
 ```
+
+実装時の変更点:
+- 実体の同一性判定を `(st_dev, st_ino)` から `(st_dev, st_ino, st_ctime_ns)` に強化した。削除・再作成で i-node 番号が再利用され、差し替えを検出できないことをテストで確認したため
+- `input_hash` は入力から `mode` を除いた正規化 JSON の SHA-256（dry-run と apply で同一入力かを判定するため）
+- remediation-log に `mode` と `plan_hash` を追加（契約 §6 への追加。どの計画のどの実行かを一意にするため）
 
 操作は共通インターフェース（`plan(target, params) -> (before, after)` / `apply()` / `rollback(before)` / `verify(after)`）で追加する。`write_config` / `rotate_secret` は設計が固まるまでレジストリに登録しない。
 

@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kajisho5/zero-exec-triage/schemas/remediation-plan.schema.json",
+  "title": "ZET remediation-plan.json",
+  "description": "ZET（判断層）の出力契約。ZET が所有し、GER（修復層）は schema_version を固定して参照する。status: draft は未確定の下書きで GER は受理しない。未知フィールドは拒否（strict）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "plan_id", "created_at", "status", "items", "held"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "plan_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "created_at": { "$ref": "#/$defs/ts" },
+    "status": { "enum": ["ok", "partial", "error", "draft"] },
+    "plan_hash": { "$ref": "#/$defs/sha256", "description": "plan_hash を除いた本体の正規化 JSON の SHA-256（A-6）。確定 plan のみ" },
+    "items": { "type": "array", "items": { "$ref": "#/$defs/item" } },
+    "held": { "type": "array", "items": { "$ref": "#/$defs/held" } }
+  },
+  "if": { "properties": { "status": { "const": "draft" } } },
+  "then": {
+    "not": { "required": ["plan_hash"] }
+  },
+  "else": {
+    "required": ["plan_hash"],
+    "properties": { "items": { "items": { "$ref": "#/$defs/final_item" } } }
+  },
+  "$defs": {
+    "ts": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "ts_or_null": { "anyOf": [{ "$ref": "#/$defs/ts" }, { "type": "null" }] },
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "person": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$" },
+    "level": { "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"] },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["finding_id", "decision", "exception_type", "reason", "owner", "decided_by", "decided_at", "due_at", "recheck_at", "approved_by", "level_effective", "action"],
+      "properties": {
+        "finding_id": { "$ref": "#/$defs/sha256" },
+        "decision": { "enum": ["remediate", "exception", "defer", null] },
+        "exception_type": { "enum": ["not_affected", "fix_unavailable", "risk_accepted", null] },
+        "reason": { "type": ["string", "null"] },
+        "owner": { "type": ["string", "null"] },
+        "decided_by": { "anyOf": [{ "$ref": "#/$defs/person" }, { "type": "null" }], "description": "判断者（A-2）" },
+        "decided_at": { "$ref": "#/$defs/ts_or_null" },
+        "due_at": { "$ref": "#/$defs/ts_or_null" },
+        "recheck_at": { "$ref": "#/$defs/ts_or_null" },
+        "approved_by": { "type": "array", "items": { "$ref": "#/$defs/person" } },
+        "level_effective": { "$ref": "#/$defs/level", "description": "SkillPact 規則で引き上げた後の重大度（A-3）。入力の level は改変しない" },
+        "action": { "anyOf": [{ "$ref": "#/$defs/action" }, { "type": "null" }] },
+        "constraints": { "$ref": "#/$defs/constraints" }
+      }
+    },
+    "final_item": {
+      "not": { "required": ["constraints"] },
+      "properties": {
+        "decision": { "enum": ["remediate", "exception", "defer"] },
+        "decided_by": { "$ref": "#/$defs/person" },
+        "decided_at": { "$ref": "#/$defs/ts" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "target", "params"],
+      "properties": {
+        "type": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+        "target": { "type": "string", "pattern": "^/" },
+        "params": { "type": "object" },
+        "reversible": { "type": "boolean", "description": "操作種別から ZET が決める（A-4）。finalize で付与" },
+        "skillpact_effects": { "type": "array", "uniqueItems": true, "items": { "type": "string" }, "description": "対象 finding の skillpact.declared_effects（A-4）。finalize で付与" }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_decisions", "min_approvers"],
+      "description": "draft のみの注記。check は plan 側の値を信用せず入力から再計算する",
+      "properties": {
+        "allowed_decisions": { "type": "array", "items": { "enum": ["remediate", "exception", "defer"] } },
+        "min_approvers": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "held": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["finding_id", "reason"],
+      "properties": {
+        "finding_id": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "module": { "type": "string", "pattern": "^(§([1-9]|[1-4][0-9])|core)$", "description": "モジュール単位の保留（A-5）" },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "if": { "properties": { "finding_id": { "type": "null" } } },
+      "then": { "required": ["module"] }
+    }
+  }
+}

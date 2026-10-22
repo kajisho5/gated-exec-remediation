@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kajisho5/gated-exec-remediation/schemas/remediation-log.schema.json",
+  "title": "GER remediation-log.json",
+  "description": "GER（修復層）の出力契約。GER が所有する。契約 §6 に mode と plan_hash を追加（どの計画のどの実行かを一意にするため）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "plan_id", "plan_hash", "mode", "started_at", "finished_at", "status", "results"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "plan_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "plan_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "mode": { "enum": ["dry-run", "apply"] },
+    "started_at": { "$ref": "#/$defs/ts" },
+    "finished_at": { "$ref": "#/$defs/ts" },
+    "status": { "enum": ["ok", "partial", "error"] },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["finding_id", "action_type", "target", "before", "after", "result", "reason", "applied_at"],
+        "properties": {
+          "finding_id": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "action_type": { "type": ["string", "null"] },
+          "target": { "type": ["string", "null"] },
+          "before": { "type": ["string", "null"] },
+          "after": { "type": ["string", "null"] },
+          "result": { "enum": ["applied", "skipped", "failed", "rolled_back"] },
+          "reason": { "type": "string" },
+          "applied_at": { "anyOf": [{ "$ref": "#/$defs/ts" }, { "type": "null" }] }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ts": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" }
+  }
+}
