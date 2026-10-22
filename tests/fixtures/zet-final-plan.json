@@ -1,0 +1,360 @@
+{
+  "created_at": "2026-10-22T10:00:00Z",
+  "held": [],
+  "items": [
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "exec",
+          "write",
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-11-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:bebc1894131226397ed98d95ba03f6f111adc46a6b81d65eb61450c45380b7ee",
+      "level_effective": "HIGH",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "exec",
+          "write",
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-11-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:7d67cf6a8f98d9c26ab2edaa8b55901347abbb40d1f43ba237c69ad446e6c6a2",
+      "level_effective": "HIGH",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "exec",
+          "network",
+          "write",
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [
+        "security-lead",
+        "platform-owner"
+      ],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-11-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:07c4173014cbfca1dcb13e24cd5a3bb372d70cd2f66851cecff32d76e06bd4f3",
+      "level_effective": "HIGH",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-10-29T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:f80cee53a1bd3d89814b7625f429842c4ebd1049448bb162d3f500010415a75f",
+      "level_effective": "CRITICAL",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "exec",
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-10-29T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:60c09d130c51e4a0a0f04982f7f2490569cd2151fd8ff85105cb91eaad5ac4f8",
+      "level_effective": "CRITICAL",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "exec",
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-12-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:69d9642ced1f5dd0bee95d2ffccfe540e48c84c472f25622dfad149ea1c3c155",
+      "level_effective": "MEDIUM",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "exec",
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-11-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:49f4fc38b667a2d414f2c1c30a2b20dca7875b7438da276a188dde73f88b9a0d",
+      "level_effective": "HIGH",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "exec",
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-11-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:c4f4b95458f9166ffea412e492e48c5685fb1f95f3b09f60e4793f003921c028",
+      "level_effective": "HIGH",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "exec",
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-11-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:0e573f6a6761d0bde5578e713fcc0ae530d0d00d5d3adcf1ca68a2cd05031ef4",
+      "level_effective": "HIGH",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "write",
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-10-29T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:c9ceb1f0bea06943fbfb11a5fd257882847138cb2950f00765f77359e1f3e36d",
+      "level_effective": "CRITICAL",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-10-29T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:eeafcad8211769c1d5f20d6f72475484e87cf359c5f35b9b024c19b1dc02a8cf",
+      "level_effective": "CRITICAL",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-10-29T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:e4329612906f5f423c1adba5f1838f0b3226d3e579f765328a38efcf7f24aa9a",
+      "level_effective": "CRITICAL",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "read"
+        ],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-10-29T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:4d6513778e100997fbdb0e8d8328f6ac4a0662a551f32d7f88d91e260a9aeabe",
+      "level_effective": "CRITICAL",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    },
+    {
+      "action": {
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/target",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-11-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:e383c740df0a877d9f9ac31ddea3f37332f7dae02473202b4c3c2e26b6832a66",
+      "level_effective": "HIGH",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z"
+    }
+  ],
+  "plan_hash": "sha256:8c6f5d971c34ff9d81b063927b897e675fb6e187d3cd21c24dbacb6ee692fd3c",
+  "plan_id": "3f0c9a52-6b1e-4c7a-9d2e-5a8b7c6d1e0f",
+  "schema_version": "1.0",
+  "status": "ok"
+}
