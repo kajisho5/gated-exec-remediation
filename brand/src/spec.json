@@ -1,0 +1,65 @@
+{
+  "background": "gradient:#14333A,#050E10",
+  "darkBackground": "gradient:#0D2226,#030809",
+  "groups": [
+    {
+      "name": "Check",
+      "props": {
+        "translucency": {
+          "enabled": true,
+          "value": 0.12
+        },
+        "blur-material": 0.2,
+        "shadow": {
+          "kind": "neutral",
+          "opacity": 0.5
+        },
+        "specular": true
+      },
+      "layers": [
+        {
+          "file": "check.svg",
+          "name": "2 Check",
+          "props": {
+            "glass": true,
+            "fill": {
+              "linear-gradient": [
+                "#FFFFFF",
+                "#D9FFE8"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Gate",
+      "props": {
+        "translucency": {
+          "enabled": true,
+          "value": 0.15
+        },
+        "blur-material": 0.1,
+        "shadow": {
+          "kind": "neutral",
+          "opacity": 0.35
+        }
+      },
+      "layers": [
+        {
+          "file": "gate.svg",
+          "name": "1 Gate",
+          "props": {
+            "glass": true,
+            "fill": {
+              "linear-gradient": [
+                "#6DF0A0",
+                "#2EA8E6"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
