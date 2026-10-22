@@ -3,7 +3,7 @@
 - **版**: 設計 0.1（2026-10-22）／ 2026-10-22 承認（C-1〜C-6 を採用）、実装 0.1.0
 - **層**: 修復層（ZES → ZET の後段。3 層で唯一、変更を実行する）
 - **原則**: Gated-Exec。すべてのゲートを通過した操作だけを、計画に書かれた対象にだけ、冪等に実行する
-- **上位文書**: [ZES スキル契約書](https://github.com/kajisho5/zero-exec-shield/blob/claude/zes-v5.2-skillpact/docs/skill-contracts.md)（§1, §5〜§8）、[ZET 設計書](https://github.com/kajisho5/zero-exec-triage/blob/claude/zet-design/docs/design/design.md)
+- **上位文書**: [ZES スキル契約書](https://github.com/kajisho5/zero-exec-shield/blob/main/docs/skill-contracts.md)（§1, §5〜§8）、[ZET 設計書](https://github.com/kajisho5/zero-exec-triage/blob/main/docs/design/design.md)
 
 ```
 [ZET] remediation-plan.json ─┐
