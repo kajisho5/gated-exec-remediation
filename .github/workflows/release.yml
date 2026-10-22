@@ -1,0 +1,37 @@
+# main の CHANGELOG.md 先頭の版（"## X.Y.Z — YYYY-MM-DD"）に対応するタグ vX.Y.Z が無ければ、
+# タグと GitHub Release を作る。リリースノートは CHANGELOG のその版の節。外部 Action は使わない（gh はランナー標準）。
+name: release
+on:
+  push:
+    branches: [main]
+    paths: [CHANGELOG.md]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: CHANGELOG から版とリリースノートを取り出す
+        id: ver
+        run: |
+          line="$(grep -m1 -E '^## [0-9]+\.[0-9]+\.[0-9]+ ' CHANGELOG.md || true)"
+          ver="$(printf '%s' "$line" | sed -E 's/^## ([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
+          if [ -z "$ver" ]; then echo "CHANGELOG に版の見出しがありません"; exit 1; fi
+          # その版の見出しの次の行から、次の "## " 見出しの手前まで
+          awk -v v="$ver" 'BEGIN{p=0} /^## /{ if (p) exit; if (index($0, "## " v " ")==1) {p=1; next} } p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+      - name: タグと Release を作成（既にあれば何もしない）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          if gh release view "v$VER" >/dev/null 2>&1; then echo "v$VER は作成済み"; exit 0; fi
+          gh release create "v$VER" --target "$GITHUB_SHA" --title "v$VER" --notes-file "$RUNNER_TEMP/notes.md"
