@@ -72,7 +72,7 @@ bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode �
 | G-5 | 操作が allowed_actions に無い、または GER 未対応 |
 | G-6 | reversible / skillpact_effects（[SkillPact](https://github.com/kajisho5/skillpact) の effects）が無い（ZET 確定済みでない）、reversible が操作の性質と不一致、不可逆操作で承認者 2 名未満（大文字小文字だけが異なる名前は同一人物として数える） |
 | G-7 | 対象が正規化済みの絶対パスでない・存在しない・シンボリックリンク（途中経路を含む）・通常ファイル/ディレクトリ以外・所有者でない・計画内で重複（ハードリンクで同じ実体を指す場合を含む）、chmod の mode が `^0[0-7]{3}$` 以外 |
-| G-8 | apply 時に、同一 plan_hash・同一入力（mode 以外）の dry-run 成功記録が有効期限内に無い、または監査ログのハッシュチェーンが壊れている |
+| G-8 | apply 時に、同一 plan_hash・同一入力（mode 以外）の dry-run 成功記録が有効期限内に無い、または監査ログのハッシュチェーンが壊れている（途中で切れた最終行など、UTF-8 の JSON object として読めない行も壊れているとみなす） |
 
 実行中は、事前検証時の実体 ID（`st_dev`・`st_ino`・`st_ctime_ns`）と一致する場合だけ変更します。i-node 番号は削除・再作成で再利用されることがあるため、ctime も含めて同一の実体かを判定しています。
 
@@ -91,10 +91,10 @@ bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode �
 ## テスト
 
 ```bash
-tests/run-tests.sh   # 単体テスト（42 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
+tests/run-tests.sh   # 単体テスト（43 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
 ```
 
-root で実行すると「読めないファイル（0000）」のテストは SKIP になります（一般ユーザーでは 42 件すべて実行）。ZET が確定した実際の計画（`tests/fixtures/zet-final-plan.json`）で、スキーマと plan_hash の互換性も確認しています。
+root で実行すると「読めないファイル（0000）」のテストは SKIP になります（一般ユーザーでは 43 件すべて実行）。ZET が確定した実際の計画（`tests/fixtures/zet-final-plan.json`）で、スキーマと plan_hash の互換性も確認しています。
 
 ## ライセンス
 

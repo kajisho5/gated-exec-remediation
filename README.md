@@ -78,7 +78,7 @@ The `-o` destination is checked before any change begins: its parent directory m
 | G-5 | The action is not in allowed_actions, or GER does not support it |
 | G-6 | reversible / skillpact_effects ([SkillPact](https://github.com/kajisho5/skillpact) effects) is missing (not finalized by ZET), reversible does not match the nature of the action, or an irreversible action has fewer than 2 approvers (names differing only in case count as the same person) |
 | G-7 | The target is not a normalized absolute path, does not exist, is a symbolic link (including any intermediate path component), is not a regular file/directory, is not owned by the user, or is duplicated within the plan (including hard links to the same underlying file); or the chmod mode does not match `^0[0-7]{3}$` |
-| G-8 | On apply, there is no unexpired successful dry-run record with the same plan_hash and the same input (apart from mode), or the audit log's hash chain is broken |
+| G-8 | On apply, there is no unexpired successful dry-run record with the same plan_hash and the same input (apart from mode), or the audit log's hash chain is broken (a line that is not a UTF-8 JSON object, such as a torn last line, also counts as broken) |
 
 During execution, a change is made only if the object's identity matches the one captured during pre-validation (`st_dev`, `st_ino`, `st_ctime_ns`). Because inode numbers can be reused after deletion and re-creation, ctime is included to determine that it is the same object.
 
@@ -97,12 +97,12 @@ During execution, a change is made only if the object's identity matches the one
 ## Tests
 
 ```bash
-tests/run-tests.sh   # 単体テスト（42 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
+tests/run-tests.sh   # 単体テスト（43 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
 ```
 
-This runs the unit tests (42; chmod, rollback and swap detection are verified on real files in a temporary directory) plus strace-based verification that no external process is launched.
+This runs the unit tests (43; chmod, rollback and swap detection are verified on real files in a temporary directory) plus strace-based verification that no external process is launched.
 
-When run as root, the "unreadable file (0000)" test is SKIPped (as a regular user all 42 tests run). Schema and plan_hash compatibility are also checked against an actual plan finalized by ZET (`tests/fixtures/zet-final-plan.json`).
+When run as root, the "unreadable file (0000)" test is SKIPped (as a regular user all 43 tests run). Schema and plan_hash compatibility are also checked against an actual plan finalized by ZET (`tests/fixtures/zet-final-plan.json`).
 
 ## License
 
