@@ -392,6 +392,35 @@ class TestExecution(Base):
             self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "出力先が不正なのに変更されています")
         self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
 
+    def test_output_must_not_be_audit_log_or_input(self):
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        before = audit.log_path().read_bytes()
+        src = self.write(inp, "dr.json"); src_bytes = Path(src).read_bytes()
+        hl = self.d / "input-hardlink"; os.link(src, hl)
+        for out in (str(audit.log_path()), str(audit.log_dir() / "other.json"), src, str(hl)):
+            code, err = self.run_cli("dry-run", src, "--operator", "ops", "--now", NOW, "-o", out)
+            self.assertEqual(code, 64, (out, err))
+        self.assertEqual(audit.log_path().read_bytes(), before, "監査ログが置き換えられています")
+        self.assertEqual(Path(src).read_bytes(), src_bytes, "入力が上書きされています")
+        self.assertFalse((audit.log_dir() / "other.json").exists())
+
+    def test_output_must_not_be_plan_target(self):
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        hl = self.d / "target-hardlink"; os.link(self.targets[1], hl)
+        for command in ("dry-run", "apply"):
+            src = copy.deepcopy(inp); src["mode"] = command
+            for out in (str(self.targets[1]), str(hl)):
+                code, err = self.run_cli(command, self.write(src), "--operator", "ops", "--now", NOW, "-o", out)
+                self.assertEqual(code, 64, (command, out, err))
+                self.assertIn("計画の対象", err)
+        self.assertTrue(all(mode_of(t) == 0o644 and t.read_text() == "x" for t in self.targets), "対象が変更されています")
+        recs = [json.loads(line) for line in audit.log_path().read_text().splitlines()]
+        self.assertEqual([r["result"] for r in recs[1:]], ["error"] * 4)
+        self.assertTrue(all("計画の対象" in r["error"] for r in recs[1:]))
+        self.assertEqual(audit.verify_chain(), [])
+
     def test_output_write_failure(self):
         inp = self.ger_input()
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
