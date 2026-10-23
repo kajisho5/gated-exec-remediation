@@ -66,6 +66,7 @@ def _check_output(path: str, input_path: str) -> None:
     """変更を始める前に -o の出力先を検証する（書けないと分かっている出力先で apply しない）。
 
     os.replace で置き換えるため、監査ログ（とそのディレクトリ内のファイル）や入力ファイルは指定できない。
+    既存のパスは通常ファイルに限る（シンボリックリンク・FIFO・ソケット・デバイスは置き換えずに拒否する）。
     """
     if not path or path.endswith("/"):  # abspath は "" を cwd に、末尾の / を落として解釈してしまう
         raise ValueError(f"-o にはファイルのパスを指定してください（空のパス・末尾が / のパスは不可）: {path!r}")
@@ -77,6 +78,10 @@ def _check_output(path: str, input_path: str) -> None:
         raise ValueError(f"-o の出力先を確認できません: {path}（{e.strerror}）") from None
     if st is not None and stat.S_ISDIR(st.st_mode):
         raise ValueError(f"-o にディレクトリは指定できません: {path}")
+    if st is not None and stat.S_ISLNK(st.st_mode):  # os.replace はリンク先ではなくリンク自体を置き換えるため拒否する
+        raise ValueError(f"-o にシンボリックリンクは指定できません: {path}")
+    if st is not None and not stat.S_ISREG(st.st_mode):  # FIFO・ソケット・デバイス（/dev/null など）を置き換えない
+        raise ValueError(f"-o に通常ファイル以外は指定できません: {path}")
     d = os.path.dirname(path) or "."  # 与えられたパスのままの親（abspath で .. などを畳まない）
     if not os.path.isdir(d):
         raise ValueError(f"-o の出力先ディレクトリがありません: {d}")

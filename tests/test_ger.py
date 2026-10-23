@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import socket
 import stat
 import tempfile
 import time
@@ -487,6 +488,28 @@ class TestExecution(Base):
         self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
         self.assertEqual(existing.read_text(), "old")
         self.assertFalse((self.d / "nd").exists())
+
+    def test_output_must_be_regular_file_not_symlink(self):
+        # FIFO・ソケット・デバイスやシンボリックリンクを通常ファイルで置き換えない（root で -o /dev/null を壊さない）
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        fifo = self.d / "out.fifo"; os.mkfifo(fifo)
+        sock = self.d / "out.sock"
+        s = socket.socket(socket.AF_UNIX); s.bind(str(sock)); self.addCleanup(s.close)
+        real = self.d / "real.json"; real.write_text("old")
+        link = self.d / "out-link.json"; link.symlink_to(real)
+        dangling = self.d / "dangling.json"; dangling.symlink_to(self.d / "nowhere.json")
+        n = len(audit.log_path().read_text().splitlines())
+        for command, src in (("dry-run", inp), ("apply", ap)):
+            for out in (fifo, sock, link, dangling):
+                code, err = self.run_cli(command, self.write(src), "--operator", "ops", "--now", NOW, "-o", str(out))
+                self.assertEqual(code, 64, (command, out, err))
+        self.assertTrue(stat.S_ISFIFO(os.lstat(fifo).st_mode)); self.assertTrue(stat.S_ISSOCK(os.lstat(sock).st_mode))
+        self.assertTrue(link.is_symlink() and dangling.is_symlink())
+        self.assertEqual(real.read_text(), "old"); self.assertFalse((self.d / "nowhere.json").exists())
+        self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets))
+        self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
 
     def test_output_must_not_be_audit_log_or_input(self):
         inp = self.ger_input()
