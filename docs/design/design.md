@@ -1,14 +1,16 @@
 # GER（Gated-Exec Remediation）詳細設計書 — Step 1
 
 - **版**: 設計 0.1（2026-10-22）／ 2026-10-22 承認（C-1〜C-6 を採用）、実装 0.1.0
+- **追補**: 修復能力拡張 設計 0.2（2026-10-23 承認。Q-1〜Q-6 を推奨どおり採用）の Phase 1 を実装（§10）。§1〜§9 は Phase 1 に合わせて更新した
 - **層**: 修復層（ZES → ZET の後段。3 層で唯一、変更を実行する）
 - **原則**: Gated-Exec。すべてのゲートを通過した操作だけを、計画に書かれた対象にだけ、冪等に実行する
 - **上位文書**: [ZES スキル契約書](https://github.com/kajisho5/zero-exec-shield/blob/main/docs/skill-contracts.md)（§1, §5〜§8）、[ZET 設計書](https://github.com/kajisho5/zero-exec-triage/blob/main/docs/design/design.md)
 
 ```
+[ZET] draft ─▶ [GER] preview（params のハッシュ・ops を埋める。変更なし）─▶ [ZET] finalize
 [ZET] remediation-plan.json ─┐
-人間の承認（approval）───────┼─▶ [GER] ゲート 1〜7 ─▶ dry-run ─▶ apply ─▶ remediation-log.json
-allowed_actions ─────────────┘
+人間の承認（approval）───────┼─▶ [GER] ゲート 1〜10 ─▶ dry-run ─▶ apply ─▶ remediation-log.json
+allowed_actions ─────────────┘                                  └─▶ 隔離ストア（restore で戻せる）・checklist（confirm で記録）
 ```
 
 ---
@@ -18,15 +20,22 @@ allowed_actions ─────────────┘
 ### 1.1 目的
 ZET が確定した修復計画を、人間の明示承認を受けたうえで実行する。誤った計画・承認のない計画・計画外の対象への変更を **実行前に** すべて止めることが最優先で、修復の網羅性は二の次とする。
 
-### 1.2 初版のスコープ
+### 1.2 スコープ（Phase 1）
 
-| 操作 | 初版 | 理由 |
+| 操作 | Phase 1 | 内容 |
 |---|---|---|
-| `chmod` | **実装** | 可逆・ローカル・冪等で、ZES §11（SSH/GPG 権限）の修復にそのまま使える |
-| `write_config` | 未対応として **拒否** | 設定ファイルの書き換え範囲（差分形式・対象形式）が契約で未定義 |
-| `rotate_secret` | 未対応として **拒否** | 外部サービスの認証情報を変える不可逆操作。対象サービスと API の取り扱いを決めてから |
+| `chmod` | 実装（初版から） | 権限を絞るだけ。ZES §11（SSH/GPG 権限） |
+| `quarantine` | **実装** | ファイル・ツリー・シンボリックリンクを隔離ストアへ rename で移す。関係 self / npm_pkg_dir / npm_installed / pypi_record / ext_dir / skill_dir |
+| `edit_json` | **実装** | JSON / JSONC の H に一致するメンバーを取り除く・K の定数に置き換える（書式とコメントを保つ） |
+| `edit_toml` | **実装（Phase 1 の範囲）** | 標準のテーブルヘッダで定義された `[mcp_servers.<name>]` を取り除く。ドット区切りのキー・インラインテーブルは拒否 |
+| `remove_line` | **実装** | シェルの rc・git config・php.ini・ld.so.preload・/etc/cron.d の H に一致する最上位の 1 行を取り除く |
+| `disable_mcp_server` | **実装** | edit_json / edit_toml の preset（MCP サーバーの定義だけ） |
+| `checklist` | **実装** | GER はファイルを変えない。apply で `pending_manual`、`ger confirm` で手順ごとに記録 |
+| `ger restore` | **実装** | 計画の外のコマンド。隔離したもの・編集前のファイルを戻す（承認者 2 名・dry-run 必須） |
+| `replace_token` / `pin_action` / `pin_digest` / `ensure_line`、関係 plist_program / preload_lib / unit_wants | Phase 2（未実装。G-5 / G-9 で拒否） | |
+| `write_config` / `rotate_secret` | 登録しない | 秘密情報の失効・ローテーションはネットワークと不可逆な操作が要るため、どの段階でもチェックリスト |
 
-未対応の操作を含む計画は、**その 1 件だけでなく計画全体を事前検証で拒否**する（部分適用禁止）。
+ファイルを削除する操作は無い。どの操作も変える前の状態を隔離ストアに残す（chmod は元の mode を remediation-log に残す）。未対応の操作を含む計画は、**その 1 件だけでなく計画全体を事前検証で拒否**する（部分適用禁止）。
 
 ### 1.3 機能一覧
 
@@ -36,12 +45,17 @@ ZET が確定した修復計画を、人間の明示承認を受けたうえで�
 | `ger dry-run <ger-input.json>` | 検証＋各操作の before/after を計算してログに記録（変更なし） | 0 / 3 |
 | `ger apply <ger-input.json>` | 検証＋同一計画の dry-run 記録を確認して実行。失敗時は全件ロールバック | 0 / 3=拒否 / 4=失敗しロールバック済 / 5=ロールバックも失敗 |
 | `ger verify-log [LOG]` | 監査ログのハッシュチェーンを検証（読むだけ。この実行は記録しない） | 0=健全 / 3=破損 / 64=ログが無い・読めない |
+| `ger preview <draft-plan.json> -o OUT [--report R] [--diff]` | 下書きの action の params（ハッシュ・ops・`expected_after_sha256`）を現在の内容から埋める。変更しない。監査ログに `preview` として記録するが dry-run には数えない | 0 / 3=拒否あり（`--report` に item ごとの理由） |
+| `ger confirm <ger-input.json> --item FID --step CL-XXX:sN` | checklist / followup の手順の確認を監査ログに追記（apply の成功記録の後。作業者は承認者でないこと） | 0 / 3 |
+| `ger restore <restore-request.json> -o OUT` | 隔離ストアのエントリを戻す（§10.5） | 0 / 3 / 4 / 5 |
+| `ger recover <ger-input.json> -o OUT` | ジャーナルに残った未完了の apply を巻き戻す（G-1〜G-4 を適用） | 0 / 3 / 5 |
+| `ger quarantine-list [--json] [--plan-id ID]` | 隔離ストアの一覧とマニフェストの検証（読むだけ） | 0 |
 
 `ger-input.json` は契約 §5（`schema_version` / `plan` / `approval` / `mode` / `allowed_actions`）。`mode` とサブコマンドが食い違う場合は拒否。
 
 ### 1.4 非機能要件
 - **依存ゼロ**: Python 3.11 以上の標準ライブラリのみ。`python3 -I -S` で起動（site を読み込まないので site-packages の `.pth` も実行されない）
-- **外部プロセスを起動しない**: `chmod` も `os.chmod` で行い、シェル・外部コマンドを使わない
+- **外部プロセスもネットワークも使わない**: `chmod` も `os.fchmod`、移動は `os.rename`、バックアップは `os.link` で行い、シェル・外部コマンドを使わない。テストで全コマンドの execve とネットワークのシステムコールを strace で確かめる
 - **fail-closed**: どのゲートでも失敗したら何も変更しない
 - **冪等**: 既に目標状態なら `skipped`（`reason: "already_compliant"`）
 
@@ -51,13 +65,15 @@ ZET が確定した修復計画を、人間の明示承認を受けたうえで�
 
 | # | ゲート | 拒否条件 | 根拠 |
 |---|---|---|---|
-| G-1 | スキーマ | 入力・plan が strict スキーマに不適合、`schema_version` 不一致、入力に `findings` キーがある。plan だけで評価できる ZET の不変条件（I-1 の一意性、I-3、I-4 の action の形と対象パスの形、`items[].skillpact` に対する I-5 / I-6 / I-7 と `skillpact_effects` の整合、危険な効果の remediate の承認者 2 名、I-9 の日付の前後関係、I-11 の日時の実在、I-12 の partial と held）に反する | 飛び越し禁止・版固定・承認トークンは完全性しか示さないため（§4） |
+| G-1 | スキーマ | 入力・plan が strict スキーマに不適合、`schema_version` 不一致、入力に `findings` キーがある。action の params が `schemas/actions.schema.json` と操作の意味の検査に合わない。plan 1.0 に chmod 以外の操作がある。plan 1.1 の action に relation / finding_path / evidence が無い、target が null なのに checklist でない。plan だけで評価できる ZET の不変条件（I-1 の一意性、I-3、I-4 の action の形と対象パスの形、`items[].skillpact` に対する I-5 / I-6 / I-7 と `skillpact_effects` の整合、危険な効果の remediate の承認者 2 名、I-9 の日付の前後関係、I-11 の日時の実在、I-12 の partial と held）に反する | 飛び越し禁止・版固定・承認トークンは完全性しか示さないため（§4） |
 | G-2 | 計画状態 | `plan.status` が `ok`/`partial` 以外（`draft`・`error` は拒否）。`now_override: true` の plan（ZET が `--now` で作成）で `GER_ALLOW_NOW_OVERRIDE` が `1` でない。現在時刻が remediate の `due_at` の最大値を過ぎている | 失敗の伝播（ZET A-1）・テスト用の計画と期限切れの計画を実行しない |
 | G-3 | 承認 | `approval.plan_id != plan.plan_id`、`approval_token != plan_hash`、`approved_by` が空、`approved_at` が未来・plan 作成前・`GER_APPROVAL_MAX_AGE`（既定 7 日）より古い | 承認なき実行禁止（§3）・古い承認の再利用禁止 |
 | G-4 | 自己承認防止 | `approval.approved_by` に `--operator` が含まれる | 承認の連鎖 |
 | G-5 | 許可リスト | `action.type` が `allowed_actions` 外、または GER 未対応 | 許可リスト方式 |
-| G-6 | 二重承認 | `action.reversible == false` で `approval.approved_by` が 2 名未満。`action.skillpact_effects` に exec/network/spend/send（SkillPact 0.8）を含むのに、その操作が `allowed_actions` に明示されていない、または `approval.approved_by` が 2 名未満（ZET の I-6 も item の `approved_by` に 2 名を求める） | `reversible: false`・SkillPact 不変条件 |
-| G-7 | 対象の事前検証（全件） | 対象が存在しない／正規化済みの絶対パスでない／シンボリックリンク（`lstat`、途中経路を含む）／監査ログとその上位（`GER_LOG_DIR` の字句上の上位と実パスの上位の和集合）／操作固有の検証失敗（chmod: world-writable、現在の mode に無い権限ビットを足す）／`action.evidence_hash` が現在のファイルと不一致 | 対象の限定・部分適用禁止・修復は権限を絞るだけ |
+| G-6 | 二重承認 | `action.reversible == false`・破壊的な操作（Phase 1 には無い）・root が必要な対象で `approval.approved_by` が 2 名未満（plan 1.1 では item の `approved_by` にも 2 名を求める）。`action.skillpact_effects` に exec/network/spend/send（SkillPact 0.8）を含むのに、その操作が `allowed_actions` に明示されていない、または `approval.approved_by` が 2 名未満（ZET の I-6 も item の `approved_by` に 2 名を求める） | `reversible: false`・SkillPact 不変条件 |
+| G-7 | 対象の事前検証（全件） | 対象が存在しない／正規化済みの絶対パスでない／途中の要素がシンボリックリンク（`/` から 1 要素ずつ `O_PATH\|O_NOFOLLOW\|O_DIRECTORY` でたどる）／監査ログ・隔離ストアとその上位／同じ対象への操作が group 以外で重複・一方が他方の上位／操作固有の検証失敗（chmod: 現在の mode に無い権限ビットを足す。quarantine: 種類・ハッシュ・`st_nlink`・FIFO・別のデバイス。編集: 1 MiB 超・xattr・`file_sha256` と `expected_after_sha256` の不一致）／`action.evidence`（1.0 は `evidence_hash`）が現在の finding_path と不一致 | 対象の限定・部分適用禁止・dry-run の結果を apply に縛る |
+| G-9 | 範囲と関係 | ファイルを変える操作（chmod 以外）で `plan.scope` が無い・対象が `scope.roots` と `scope.home` の外／隔離ストアが scope.roots・site-packages・node_modules・PATH の下／保護対象（§10.6）／`/etc` の許可リスト外／root が必要な対象（システムのディレクトリの下・所有者が実行ユーザーでない）で承認者が 2 名未満、または root が必要な対象とそうでない対象が同じ計画にある／`action.relation` が字句上・ファイルシステム上で成り立たない（§10.3） | 対象と finding の関係を GER が自分で導き直す |
+| G-10 | 定義 T（絞るだけ） | 取り除く単位が GER の表 H に一致しない（T-1）・足すものが表 K に無い（T-2）・変更後をパースし直した結果が「変更前 − 取り除いた単位 ⊕ K の置き換え」と一致しない（T-3）・見かけだけの修復（Q-6） | 改ざんされた計画でも緩める変更をさせない |
 | G-8 | dry-run 記録（apply のみ） | 同じ `plan_hash` と `input_hash`、同じ `--now` の扱いの、未使用の dry-run 成功記録が監査ログに無い、または `GER_DRYRUN_TTL`（既定 24 時間）より古い。記録は実行まで進んだ apply（result が ok / rolled_back / rollback_failed / applied_unlogged）で使用済みになる | dry-run を経ない apply 禁止・1 回の dry-run で 1 回の apply |
 
 `held[]` は読まない。`items[]` のうち `decision == "remediate"` のものだけが実行対象（`exception` / `defer` は `skipped`）。
@@ -65,6 +81,13 @@ ZET が確定した修復計画を、人間の明示承認を受けたうえで�
 ---
 
 ## 3. 実行とロールバック
+
+Phase 1 では、同じ `action.group` の item を 1 つのステップ（トランザクション）にまとめ、ステップを
+(1) 参照を取り除く編集（edit_json / edit_toml / remove_line / disable_mcp_server）→ (2) quarantine → (3) chmod → (4) checklist
+の順に実行する（同じ種類の中では計画の順）。結果は item ごとに出す（group の item は `reason: "group:<id>"`）。
+ファイルを変えるステップは、各段階の前後でジャーナル（隔離ストアの `journal/<run_id>.jsonl`、fsync 付き）に undo の情報を書く。
+例外による失敗は全件を逆順にロールバックし（終了コード 4）、ロールバックにも失敗したらジャーナルを開いたまま残す（終了コード 5）。
+プロセスが途中で落ちた場合も含め、開いたままのジャーナルは `ger recover` で巻き戻す。以下は初版（chmod）からの規則:
 
 ```
 全件 G-1〜G-8 → OK
@@ -136,7 +159,12 @@ gated-exec-remediation/
 - `input_hash` は入力から `mode` を除いた正規化 JSON の SHA-256（dry-run と apply で同一入力かを判定するため）
 - remediation-log に `mode` と `plan_hash` を追加（契約 §6 への追加。どの計画のどの実行かを一意にするため）
 
-操作は共通インターフェース（`plan(target, params) -> (before, after)` / `apply()` / `rollback(before)` / `verify(after)`）で追加する。`write_config` / `rotate_secret` は設計が固まるまでレジストリに登録しない。
+操作は共通インターフェース（`validate_params` / `prepare(ctx, items) -> Step` / `preview(ctx, items)`、Step は `apply(rt)` / `rollback(rt)` と JSON にできる undo）で追加する（`ger/actions/base.py`）。`write_config` / `rotate_secret` はレジストリに登録しない。
+
+Phase 1 で追加したファイル: `ger/fsutil.py`（fd でたどる対象の解決・ツリーハッシュ）、`ger/hazards.py`（表 H / K・保護対象）、
+`ger/jsonedit.py`（JSON / JSONC の字句解析と差し替え）、`ger/tomledit.py`（TOML のテーブルヘッダの範囲）、`ger/store.py`（隔離ストアとジャーナル）、
+`ger/restore.py`、`ger/actions/{base, quarantine, edit_common, edit_json, edit_toml, remove_line, disable_mcp_server, checklist}.py`、
+`schemas/{actions, restore-request}.schema.json`、`tests/{test_remediation.py, zero_exec.py, e2e_zes.py, run-e2e.sh}`。
 
 ---
 
@@ -175,3 +203,92 @@ gated-exec-remediation/
 | C-4 | apply の終了コード 4（ロールバック済）/ 5（ロールバック失敗） | 採用 |
 | C-5 | Python 3.11+ 標準ライブラリのみ、外部コマンド不使用 | 採用 |
 | C-6 | ZET 設計書 A-4（`reversible` / `skillpact_effects` を plan で受け取る）に依存 | ZET と同時に承認 |
+
+
+---
+
+## 10. Phase 1 修復操作（修復能力拡張 設計 0.2 の実装）
+
+### 10.1 流れ
+
+1. ZES が検知する（findings 1.0。1.1 の項目は ZES 未実装）
+2. `zet draft` が finding ごとに提案（`constraints.suggested_actions`: `auto` と `checklist`）を付ける。判断者が採用する
+3. `ger preview` が、採用した action の params を現在のファイルから埋める（quarantine のハッシュ・種類、編集の ops・`before_sha256`・`file_sha256`・`expected_after_sha256`）。拒否されたもの（RECORD の無い dist-info、ドット区切りの TOML など）は理由を `--report` に出す。判断者は checklist に切り替える
+4. `zet finalize` → 承認（`approval_token = plan_hash`）→ `ger dry-run` → `ger apply`
+5. 残った手作業（checklist と followup）を作業者が行い、`ger confirm` で記録する。ZES で再スキャンする
+6. 戻す必要があれば `ger restore`（承認者 2 名）
+
+承認者は「変更後の正確なバイト列」（`expected_after_sha256`）と「隔離するものの正確なハッシュ」を承認することになる。apply は計算し直した結果がこれと違えば止まる。
+
+### 10.2 定義 T（絞るだけ）の表（`ger/hazards.py`、版 `ger-hazards-1`）
+
+| 操作 | H（取り除いてよい単位。ファイルの種類ごと） | K（足してよい定数） |
+|---|---|---|
+| edit_json / disable_mcp_server | `mcp.server`: MCP 設定（`.mcp.json` / `mcp.json` / `mcp_config.json` / `.claude.json` / `claude_desktop_config.json`）の `/mcpServers/<name>`・`/servers/<name>`・`/projects/<p>/mcpServers/<name>`（値は object）。preview の自動選択は ZES §17 と同じ危険なコマンドの正規表現に一致するサーバーだけ | — |
+| edit_json | `npm.lifecycle`: `package.json` の `/scripts/(preinstall\|install\|postinstall\|prepare\|…)` | — |
+| edit_json | `claude.hook`: `.claude/settings(.local).json` の `/hooks/<Event>/<i>`（と `/hooks/<Event>/<i>/hooks/<j>`） | — |
+| edit_json | `vscode.task_run_on`: `.vscode/tasks.json` の `/tasks/<i>/runOptions/runOn`（値が `folderOpen`） | `"default"` |
+| edit_toml / disable_mcp_server | `mcp.server.toml`: `.codex/config.toml` の `[mcp_servers.<name>]` | — |
+| remove_line | `sh.ld_preload` / `sh.curl_pipe_sh` / `sh.base64_pipe_sh` / `sh.histfile_null`（シェルの rc）、`git.exec_key`（`fsmonitor` / `sshCommand` / `hooksPath`）、`php.auto_prepend`、`ldso.entry`、`cron.fetch_exec`（`/etc/cron.d/*`）。行の全体が一致すること | — |
+| quarantine | finding の対象そのもの、または §10.3 の関係で導いた対象 | — |
+
+表に無いもの（`permissions.deny`、`.npmrc` の `ignore-scripts=true`、`disable_functions` など）は取り除けない。T-3 は JSON は `json.loads`、JSONC はコメントと末尾カンマを別の経路で除いてから `json.loads`、TOML は `tomllib`、テキストは取り除いた行以外のバイトの一致で確かめる。dry-run と apply の両方で確かめる。
+
+### 10.3 関係（relation）と G-9
+
+| relation | 字句上の条件（ZET の I-4 と同じ） | GER がファイルシステムで確かめること |
+|---|---|---|
+| `self` | target == finding_path。dist-info / egg-info・`node_modules/**/package.json`・`Extensions/**/manifest.json`・`skill.contract.json` だけの隔離は拒否（Q-6） | 種類とハッシュ |
+| `npm_pkg_dir` | finding_path == target + `/package.json`、target の親が `node_modules`（scoped は親の親） | `package.json` の name / version が `params.subject` と一致し、name がディレクトリ名と一致 |
+| `npm_installed` | finding がロックファイルで、target がその隣の `node_modules/<name>`（入れ子を含む） | 同上 |
+| `pypi_record` | target == finding_path（`*.dist-info`） | RECORD がある。site-packages の下の各メンバーが通常ファイルで RECORD の sha256 と一致（.pyc 以外でハッシュの無いメンバーは拒否）。site-packages の外のメンバーは移さず preview に一覧で示す |
+| `ext_dir` | finding_path が `…/Extensions/<id>[/<ver>]/manifest.json`、target が `…/Extensions/<id>` | manifest.json が JSON としてパースできる |
+| `skill_dir` | target == finding_path、または finding_path が target の `skill.contract.json` | `skill.contract.json` か `SKILL.md` がある |
+| `none` | target が null（checklist だけ） | — |
+
+### 10.4 隔離ストア（Q-2）
+
+- 場所: `GER_QUARANTINE_DIR`、なければ `$XDG_STATE_HOME/ger/quarantine`、なければ `~/.local/state/ger/quarantine`。起動時に実パスへ解決。所有者は実行ユーザー、mode 0700、マーカー `.ger-quarantine-store`
+- 構成: `<store>/<run_id>/<seq>/{payload, manifest.json[, restored.json, rolled_back.json, replaced]}` と `<store>/journal/<run_id>.jsonl`。中の名前は連番だけ（`.pth` などの名前で読み込まれない）
+- quarantine: 同一性を照合してから `os.rename(name, "payload", src_dir_fd, dst_dir_fd)`。移した後、ファイルは 0400、ディレクトリは 0500（元の mode はマニフェストに残す）。マニフェスト（0600）は元のパス・`(dev, ino)`・mode・uid / gid・mtime・ハッシュ（ロック後のハッシュも）・plan_id / plan_hash・finding_ids・relation を持ち、その SHA-256 を監査ログに載せる
+- 編集: 同じディレクトリに一時ファイルを `O_CREAT|O_EXCL|O_NOFOLLOW` で作り、元の mode（root なら uid / gid も）で書いて fsync → 元のファイルをストアに `os.link`（バックアップ。元の i-node をそのまま残す）→ 同一性を照合して rename。適用後に SHA-256 が `expected_after_sha256` と一致することを確かめる（V）
+- 別のデバイスにある対象は拒否（rename / link が原子的でないため）。**逸脱**: デバイスごとのストア（`GER_QUARANTINE_DIRS`）は Phase 1 では実装していない。`GER_QUARANTINE_DIR` で同じデバイスのストアを 1 つ指定する
+- GER はストアから何も削除しない。削除（purge）は作業者が `ger quarantine-list` で確かめてから手で行う。消した後は restore もロールバックもできない
+- ZES の走査から外すには ZES 側の変更が要る（`.ger-quarantine-store` のあるディレクトリを走査しない。未実装）。それまでは、ストアを ZES の `--root` の外に置く（G-9 で `scope.roots` の下を拒否する）
+
+### 10.5 restore（Q-4）
+
+`restore-request.json`（`schemas/restore-request.schema.json`）は `restore_id`・`entries[{quarantine_id, manifest_sha256}]`・`approval{approved_by（2 名以上）, approved_at, approval_token}` を持つ。`approval_token` は approval と mode を除いた正規化 JSON の SHA-256。dry-run の成功記録が必要で、1 回の apply で使い切る（監査ログの command は `restore-dry-run` / `restore-apply`）。前提: マニフェストの SHA-256 が一致、ストアの中身（ロック後のハッシュ・実体 ID）がマニフェストと一致、隔離したものは元のパスが空いている、編集は現在のファイルが GER の書いた内容（`after_sha256`）のまま。戻す前の編集後のファイルは `replaced` としてストアに残す。途中で失敗したら戻したものを再び隔離する。
+
+### 10.6 保護対象と承認者
+
+- 対象にもその上位にもしない: `/` とトップレベルのシステムディレクトリ、`$HOME` そのもの、GER のインストール先（中も不可）、Python の標準ライブラリ（site-packages を除く。中も不可）、監査ログ・隔離ストアとその上位
+- `/etc` の下は `/etc/ld.so.preload`・`/etc/hosts`・`/etc/cron.d/*` だけ。root が必要な対象は承認者 2 名で、計画を root 用とそれ以外に分ける
+- 承認者の人数: checklist・self の quarantine・編集・chmod は 1 名、restore・root が必要な対象・不可逆・破壊的な操作（Phase 1 には無い）・diff_anomaly・危険な効果は 2 名
+
+### 10.7 checklist と followup
+
+`checklist` の params は `{template, steps[{id, text, blocking}], verify?}`。自動修復の action は `action.followup`（同じ形の配列）で必須の後続作業（CL-IR・CL-SECRET・CL-LAUNCHD・CL-EXT など）を持つ。どれを必須にするかは ZET が finding から決め、欠けていれば ZET の I-13 で確定させない（GER は findings を読まないため必須かどうかは判断せず、そのまま運んで表示・記録する）。`ger confirm` は apply の成功記録の後にだけ記録でき、作業者が承認者でないこと（G-4）、同じ手順の二重の記録でないことを確かめる。`verify.kind` が `path_absent` / `file_hash_changed` のときは GER が確かめてから記録し（`verified:…`）、外部の作業（ローテーションなど）は `self_attested` とだけ記録する。
+
+### 10.8 ツリーハッシュ ger-tree-v1（ZES と共通の定義）
+
+エントリ（ルート自身を `.` として含む）を相対パスのバイト列の昇順に並べ、各行
+`type \0 relpath \0 mode(4 桁の 8 進、0o7777 でマスク) \0 (f: size \0 sha256hex / l: readlink の値 / d: 空) \n`
+（type は `f` / `l` / `d`）を連結した SHA-256 を `sha256:<hex>` で表す。mtime / ctime / uid は含めない。エントリが 50,000 を超える、合計が 2 GiB を超える、FIFO・ソケット・デバイスを含む、別の `st_dev` を含む、`st_nlink > 1` の通常ファイルを含むツリーは拒否する。テストベクタは `tests/test_remediation.py` の `TestTreeHashVector`（Linux で `sha256:a0330bed2509e447a89682699b271f59ea236c52316ec21f0e546620de17958e`）。
+
+### 10.9 設計 0.2 からの逸脱
+
+| 項目 | 設計 | 実装 | 理由 |
+|---|---|---|---|
+| 検査範囲 | `ger-input.scope.roots` | `plan.scope`（`roots` と `home`） | 承認トークン（plan_hash）で束縛するため。ZET が triage-input の `policy.scope`（1.1 では findings の `scan_roots`）から作る |
+| evidence が detail の finding | quarantine も編集もしない | params に固定した preview のハッシュ（承認の対象）で照合して実行する | findings 1.0 ではディレクトリ・リンクの evidence が常に detail のため（設計 §3.0 の「1.0 のディレクトリは preview のハッシュを使う」に合わせた） |
+| group の evidence.hash の一致 | 必須 | 内容に基づく evidence（file / tree / symlink）だけ一致を求める | detail の evidence は finding ごとの文言のハッシュで一致しないため |
+| edit_toml | Phase 2 | Phase 1 の範囲（標準のテーブルヘッダ）で実装 | オーナーの指示 |
+| ジャーナル | 全操作 | quarantine と編集（chmod だけの計画はジャーナルを作らない。従来どおりプロセス内でロールバック） | chmod だけの利用者に隔離ストアを作らせないため |
+| デバイスごとのストア | `GER_QUARANTINE_DIRS` | 未実装（別のデバイスは拒否） | Phase 1 は拒否で足りる |
+| params の検査 | G-7 | G-1（`actions.schema.json` と操作の意味の検査） | 設計 §4.3 の G-1 の行に合わせた |
+| INFO の期限 | — | 隔離の group に入れた INFO の `due_at` は LOW の期限 | ポリシーに INFO の期限が無いことが多いため |
+
+### 10.10 ZES の finding と Phase 1 の扱い（E2E の結果）
+
+ZES の `tests/fixtures`（`origin/main` 98ee340）を写して ZES → ZET → GER → ZES を通しで実行した結果は README の「E2E」の表を参照（`tests/run-e2e.sh`）。
