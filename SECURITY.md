@@ -1,23 +1,25 @@
-# セキュリティポリシー
+English | [日本語](SECURITY.ja.md)
 
-GER（gated-exec-remediation）自体の脆弱性は、公開の Issue ではなく、GitHub の非公開報告で知らせてください。
+# Security policy
 
-1. リポジトリの **Security** タブを開く
-2. **Report a vulnerability** を選ぶ
+Please report vulnerabilities in GER (gated-exec-remediation) itself through GitHub's private reporting, not through a public issue.
 
-## 対象
+1. Open the repository's **Security** tab
+2. Choose **Report a vulnerability**
 
-- 最新の main ブランチ（過去のバージョンへの修正は行いません）
+## Scope
 
-報告してほしいもの（例）:
+- The latest main branch (fixes are not made to past versions)
 
-- ゲート G-1〜G-8 をすり抜けて変更を実行できる（承認の偽装、dry-run の省略など）
-- 計画外の対象・権限が変更される、ロールバックが不完全になる
+What we want reported (examples):
 
-公開 Issue で受け付けるもの:
+- A change can be executed by getting around gates G-1 to G-8 (forged approval, skipped dry-run, and so on)
+- Targets or permissions outside the plan are changed, or a rollback is incomplete
 
-- 脆弱性に当たらない不具合（判定の誤り、エラーメッセージの改善など）
+What we accept as public issues:
 
-## 対応
+- Bugs that are not vulnerabilities (wrong decisions, better error messages, and so on)
 
-個人で保守しているため、対応は可能な範囲で行います。応答期限の保証はありません。修正を公開したあとに、報告内容と修正を CHANGELOG に記載します（報告者の名前は希望があれば記載します）。
+## Response
+
+This project is maintained by one person, so responses are made as far as possible. There is no guaranteed response time. After a fix is published, the report and the fix are recorded in the CHANGELOG (the reporter's name is included if they wish).

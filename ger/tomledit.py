@@ -1,9 +1,9 @@
-"""TOML の Phase 1 の範囲の編集（edit_toml）: 標準のテーブルヘッダで定義されたテーブルを取り除く。
+"""TOML editing within Phase 1 scope (edit_toml): removes tables defined with standard table headers.
 
-対象のテーブル（例: [mcp_servers.evil]）が、標準のテーブルヘッダ（引用符付き・空白入りは正規化して比べる）と、
-そのサブテーブル [mcp_servers.evil.*] だけで定義されている場合に限り、ヘッダから次のヘッダの直前までの行を取り除く。
-ドット区切りのキー（mcp_servers.evil.command = …）やインラインテーブルで定義されている場合は、取り除く範囲を
-一意に決められないため拒否する（チェックリストにする）。変更後は tomllib でパースし直して T-3 を確かめる。
+Only when the target table (for example [mcp_servers.evil]) is defined solely by standard table headers (quoted or spaced keys are normalized before comparing)
+and its subtables [mcp_servers.evil.*], the lines from the header up to just before the next header are removed.
+A table defined with dotted keys (mcp_servers.evil.command = ...) or inline tables is rejected because the range to remove
+cannot be determined uniquely (it becomes a checklist). The result is parsed again with tomllib to check T-3.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class _Scanner:
 
     def err(self, msg):
         line = self.s.count("\n", 0, self.i) + 1
-        raise TomlEditError(f"TOML を字句解析できません: {msg}（{line} 行目）")
+        raise TomlEditError(f"cannot tokenize as TOML: {msg} (line {line})")
 
     def ws(self):
         while self.i < self.n and self.s[self.i] in " \t":
@@ -52,14 +52,14 @@ class _Scanner:
         if self.i < self.n and self.s[self.i] == "\r":
             self.i += 1
         if self.i < self.n and self.s[self.i] != "\n":
-            self.err("行末に余分な内容")
+            self.err("extra content at the end of the line")
 
     def basic(self) -> str:
         st = self.i
         self.i += 1
         while True:
             if self.i >= self.n or self.s[self.i] == "\n":
-                self.err("閉じていない文字列")
+                self.err("unterminated string")
             c = self.s[self.i]
             if c == "\\":
                 self.i += 2
@@ -70,12 +70,12 @@ class _Scanner:
         try:
             return tomllib.loads("k = " + self.s[st:self.i])["k"]
         except tomllib.TOMLDecodeError:
-            self.err("文字列のエスケープが不正")
+            self.err("invalid escape in string")
 
     def literal(self) -> str:
         j = self.s.find("'", self.i + 1)
         if j < 0 or "\n" in self.s[self.i:j]:
-            self.err("閉じていない文字列")
+            self.err("unterminated string")
         v = self.s[self.i + 1:j]
         self.i = j + 1
         return v
@@ -85,7 +85,7 @@ class _Scanner:
         while True:
             self.ws()
             if self.i >= self.n:
-                self.err("キーがありません")
+                self.err("missing key")
             c = self.s[self.i]
             if c == '"':
                 parts.append(self.basic())
@@ -94,7 +94,7 @@ class _Scanner:
             else:
                 m = _BARE.match(self.s, self.i)
                 if not m:
-                    self.err("キーを解釈できません")
+                    self.err("cannot interpret key")
                 parts.append(m.group(0))
                 self.i = m.end()
             self.ws()
@@ -105,13 +105,13 @@ class _Scanner:
 
     def value(self, assigns: list, path: tuple, depth: int = 0):
         if depth > 64:
-            self.err("入れ子が深すぎます")
+            self.err("nesting is too deep")
         s = self.s
         if s.startswith('"""', self.i):
             j = self.i + 3
             while True:
                 if j >= self.n:
-                    self.err("閉じていない複数行文字列")
+                    self.err("unterminated multi-line string")
                 if s[j] == "\\":
                     j += 2
                     continue
@@ -125,7 +125,7 @@ class _Scanner:
         elif s.startswith("'''", self.i):
             j = s.find("'''", self.i + 3)
             if j < 0:
-                self.err("閉じていない複数行文字列")
+                self.err("unterminated multi-line string")
             j += 3
             while j < self.n and s[j] == "'":
                 j += 1
@@ -139,7 +139,7 @@ class _Scanner:
             while True:
                 self.ws_nl_comments()
                 if self.i >= self.n:
-                    self.err("閉じていない配列")
+                    self.err("unterminated array")
                 if s[self.i] == "]":
                     self.i += 1
                     return
@@ -152,7 +152,7 @@ class _Scanner:
                 if self.i < self.n and s[self.i] == "]":
                     self.i += 1
                     return
-                self.err("配列の区切りが不正")
+                self.err("invalid array separator")
         elif s[self.i] == "{":
             self.i += 1
             self.ws()
@@ -163,7 +163,7 @@ class _Scanner:
                 k = self.key()
                 self.ws()
                 if self.i >= self.n or s[self.i] != "=":
-                    self.err("インラインテーブルに = がありません")
+                    self.err("missing = in inline table")
                 self.i += 1
                 self.ws()
                 assigns.append(path + tuple(k))
@@ -175,18 +175,18 @@ class _Scanner:
                 if self.i < self.n and s[self.i] == "}":
                     self.i += 1
                     return
-                self.err("インラインテーブルの区切りが不正")
+                self.err("invalid inline table separator")
         else:
             st = self.i
             while self.i < self.n and s[self.i] not in "\n#,]}":
                 self.i += 1
             if not s[st:self.i].strip():
-                self.err("値がありません")
+                self.err("missing value")
 
 
 def scan(text: str):
-    """(headers, assigns)。headers: [(行頭の位置, キーのタプル, 配列テーブルか)]。
-    assigns: [(キーの絶対パス, 属するヘッダの添字（ルートは -1）)]。"""
+    """(headers, assigns). headers: [(position of the line start, key tuple, whether it is an array table)].
+    assigns: [(absolute key path, index of the header it belongs to (root is -1))]."""
     sc = _Scanner(text)
     headers: list = []
     assigns: list = []
@@ -203,7 +203,7 @@ def scan(text: str):
             sc.ws()
             close = "]]" if arr else "]"
             if not text.startswith(close, sc.i):
-                sc.err("テーブルヘッダが閉じていません")
+                sc.err("unterminated table header")
             sc.i += len(close)
             sc.eol()
             headers.append((ls, k, arr))
@@ -212,7 +212,7 @@ def scan(text: str):
         k = tuple(sc.key())
         sc.ws()
         if sc.i >= sc.n or text[sc.i] != "=":
-            sc.err("= がありません")
+            sc.err("missing =")
         sc.i += 1
         sc.ws()
         full = table + k
@@ -226,7 +226,7 @@ def scan(text: str):
 
 
 def _plain(v):
-    """tomllib の値を正規化 JSON にできる形へ（日時は ISO 8601 の文字列）。"""
+    """Converts tomllib values into a form that canonical JSON accepts (dates and times become ISO 8601 strings)."""
     if isinstance(v, dict):
         return {k: _plain(x) for k, x in v.items()}
     if isinstance(v, list):
@@ -240,7 +240,7 @@ def loads(text: str):
     try:
         return tomllib.loads(text[1:] if text.startswith("﻿") else text)
     except tomllib.TOMLDecodeError as e:
-        raise TomlEditError(f"TOML としてパースできません: {e}") from None
+        raise TomlEditError(f"cannot parse as TOML: {e}") from None
 
 
 def plain(v):
@@ -248,7 +248,7 @@ def plain(v):
 
 
 def remove_tables(text: str, key_paths: list[tuple]) -> tuple[str, object]:
-    """key_paths の各テーブルを取り除いたテキストと、期待される値を返す。範囲を一意に決められなければ TomlEditError。"""
+    """Returns the text with each table of key_paths removed and the expected value. TomlEditError if a range cannot be determined uniquely."""
     before = loads(text)
     headers, assigns = scan(text)
     remove_idx: set[int] = set()
@@ -256,11 +256,11 @@ def remove_tables(text: str, key_paths: list[tuple]) -> tuple[str, object]:
         kp = tuple(kp)
         mine = [i for i, (_ls, k, _a) in enumerate(headers) if k[:len(kp)] == kp]
         if not mine or headers[mine[0]][1] != kp:
-            raise TomlEditError(f"テーブル {'.'.join(kp)} は標準のテーブルヘッダ [{'.'.join(kp)}] で定義されていません"
-                                "（ドット区切りのキーやインラインテーブルの定義は取り除けません）")
+            raise TomlEditError(f"table {'.'.join(kp)} is not defined with the standard table header [{'.'.join(kp)}]"
+                                " (definitions with dotted keys or inline tables cannot be removed)")
         for p, hi in assigns:
             if (p[:len(kp)] == kp or kp[:len(p)] == p) and hi not in mine:
-                raise TomlEditError(f"テーブル {'.'.join(kp)} の一部がヘッダの外（ドット区切りのキー・インラインテーブル）で定義されています")
+                raise TomlEditError(f"part of table {'.'.join(kp)} is defined outside its headers (dotted keys, inline tables)")
         remove_idx.update(mine)
     spans = []
     for i in sorted(remove_idx):
@@ -277,7 +277,7 @@ def remove_tables(text: str, key_paths: list[tuple]) -> tuple[str, object]:
             cur = cur[t]
         del cur[kp[-1]]
     after = loads(out)
-    for kp in key_paths:  # 暗黙に作られていた親テーブルが空になって消えた場合
+    for kp in key_paths:  # When an implicitly created parent table became empty and disappeared
         if len(kp) >= 2:
             par = expected
             for t in kp[:-2]:

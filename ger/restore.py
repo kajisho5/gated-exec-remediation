@@ -1,15 +1,15 @@
-"""ger restore — 隔離したもの・編集前のファイルを元の場所へ戻す（計画の外のコマンド。Q-4）。
+"""ger restore - moves quarantined objects and files from before an edit back to their original location (a command outside the plan; Q-4).
 
-restore-request.json（schemas/restore-request.schema.json）:
+restore-request.json (schemas/restore-request.schema.json):
   {"schema_version": "1.0", "restore_id": UUID, "created_at", "mode": "dry-run"|"apply",
    "entries": [{"quarantine_id", "manifest_sha256"}],
-   "approval": {"restore_id", "approved_by": [2 名以上], "approved_at", "approval_token"}}
-approval_token は request から approval と mode を除いた正規化 JSON の SHA-256。戻すことは「足す」ことになる
-（定義 T の例外）ため承認者 2 名を要求し、ger と同じく dry-run を必須にして 1 回の apply で使い切る。
+   "approval": {"restore_id", "approved_by": [2 or more], "approved_at", "approval_token"}}
+approval_token is the SHA-256 of the canonical JSON of the request without approval and mode. Restoring "adds" something
+(an exception to definition T), so it requires 2 approvers and, like ger, a mandatory dry-run that one apply uses up.
 
-前提: マニフェストの SHA-256 が一致する。隔離したものは元のパスが空いていて、ストアの中身（ロック後のハッシュ）が
-マニフェストと一致する。編集のバックアップは、現在のファイルが GER の書いた内容（after_sha256）のままであること。
-戻す前のファイル（編集後の版）は隔離ストアに残す（何も削除しない）。途中で失敗したら、戻したものを再び隔離する。
+Preconditions: the SHA-256 of the manifest matches. For a quarantined object, the original path is free and the store content (hash after locking)
+matches the manifest. For an edit backup, the current file must still be the content GER wrote (after_sha256).
+The file before restoring (the edited version) is kept in the quarantine store (nothing is deleted). If something fails halfway, restored objects are quarantined again.
 """
 from __future__ import annotations
 
@@ -37,28 +37,28 @@ def check_request(req, operator: str, now: dt.datetime, approval_max_age: int) -
         try:
             parse_ts(v)
         except ValueError:
-            return [Rejection("G-1", f"{label} が実在しない日時です: {v}")]
+            return [Rejection("G-1", f"{label} is not a valid date and time: {v}")]
     if appr["restore_id"] != req["restore_id"]:
-        rej.append(Rejection("G-3", "approval.restore_id が restore_id と一致しません"))
+        rej.append(Rejection("G-3", "approval.restore_id does not match restore_id"))
     if appr["approval_token"] != request_token(req):
-        rej.append(Rejection("G-3", "approval_token が restore-request の内容と一致しません（承認後に差し替えられた可能性）"))
+        rej.append(Rejection("G-3", "approval_token does not match the content of the restore-request (it may have been replaced after approval)"))
     at = parse_ts(appr["approved_at"])
     if at > now:
-        rej.append(Rejection("G-3", "approved_at が未来の時刻です"))
+        rej.append(Rejection("G-3", "approved_at is in the future"))
     if at < parse_ts(req["created_at"]):
-        rej.append(Rejection("G-3", "approved_at が restore-request の作成より前です"))
+        rej.append(Rejection("G-3", "approved_at is earlier than the creation of the restore-request"))
     if (now - at).total_seconds() > approval_max_age:
-        rej.append(Rejection("G-3", "承認が古すぎます。承認を取り直してください"))
+        rej.append(Rejection("G-3", "the approval is too old. Get a new approval"))
     approvers = {a.casefold() for a in appr["approved_by"]}
     if len(approvers) != len(appr["approved_by"]):
-        rej.append(Rejection("G-3", "approved_by に重複があります"))
+        rej.append(Rejection("G-3", "approved_by contains duplicates"))
     if len(approvers) < 2:
-        rej.append(Rejection("G-6", "restore（隔離したものを戻す）には承認者 2 名以上が必要です"))
+        rej.append(Rejection("G-6", "restore (moving quarantined objects back) requires 2 or more approvers"))
     if operator.casefold() in approvers:
-        rej.append(Rejection("G-4", "実行者（--operator）が承認者に含まれています"))
+        rej.append(Rejection("G-4", "the operator (--operator) is one of the approvers"))
     qids = [e["quarantine_id"] for e in req["entries"]]
     if len(set(qids)) != len(qids):
-        rej.append(Rejection("G-1", "entries に同じ quarantine_id が 2 回あります"))
+        rej.append(Rejection("G-1", "entries contains the same quarantine_id twice"))
     return rej
 
 
@@ -74,26 +74,26 @@ class RestoreStep:
     def check(self) -> None:
         m = self.m
         if m.get("schema") != "ger-quarantine-manifest/1" or m.get("quarantine_id") != self.qid:
-            raise ActionError("マニフェストの形式が不正です")
+            raise ActionError("invalid manifest format")
         from .gates import protected_reason
         why = protected_reason(m["original_path"])
         if why:
-            raise ActionError(f"G-9: 戻し先が保護対象です（{why}）")
+            raise ActionError(f"G-9: the restore destination is protected ({why})")
         efd = store.open_entry(self.qid)
         try:
             for marker in ("restored.json",):
                 try:
                     os.stat(marker, dir_fd=efd, follow_symlinks=False)
-                    raise ActionError("このエントリは既に戻されています")
+                    raise ActionError("this entry was already restored")
                 except FileNotFoundError:
                     pass
             pst = os.stat("payload", dir_fd=efd, follow_symlinks=False)
             if [pst.st_dev, pst.st_ino] != list(m["ident"]):
-                raise ActionError("隔離ストアの中身が隔離した時の実体と一致しません")
+                raise ActionError("the content of the quarantine store does not match the object at quarantine time")
             if m["operation"] == "quarantine":
                 k = m["kind"]
                 if fsutil.kind_of(pst) != k:
-                    raise ActionError("隔離ストアの中身の種類がマニフェストと一致しません")
+                    raise ActionError("the type of the quarantine store content does not match the manifest")
                 if k == "file":
                     got = fsutil.hash_file(efd, "payload", pst)
                 elif k == "tree":
@@ -101,26 +101,26 @@ class RestoreStep:
                 else:
                     got = "link:" + fsutil.readlink(efd, "payload")
                 if got != m.get("locked_hash", m["hash"]):
-                    raise ActionError("隔離ストアの中身がマニフェストのハッシュと一致しません（改ざんの可能性）")
+                    raise ActionError("the content of the quarantine store does not match the manifest hash (possible tampering)")
             elif m["operation"] == "edit_backup":
                 if fsutil.hash_file(efd, "payload", pst) != m["hash"]:
-                    raise ActionError("バックアップの内容がマニフェストのハッシュと一致しません（改ざんの可能性）")
+                    raise ActionError("the backup content does not match the manifest hash (possible tampering)")
             else:
-                raise ActionError(f"未知の operation: {m['operation']}")
+                raise ActionError(f"unknown operation: {m['operation']}")
         finally:
             os.close(efd)
         res = fsutil.resolve(m["original_path"], must_exist=False)
         try:
             if m["operation"] == "quarantine":
                 if res.st is not None:
-                    raise ActionError(f"元の場所に別のものがあるため戻せません: {m['original_path']}")
+                    raise ActionError(f"cannot restore: something else is at the original location: {m['original_path']}")
                 if os.fstat(res.parent_fd).st_dev != m["ident"][0]:
-                    raise ActionError("戻し先が別のデバイスです")
+                    raise ActionError("the restore destination is on a different device")
             else:
                 if res.st is None:
-                    raise ActionError(f"編集したファイルがありません: {m['original_path']}")
+                    raise ActionError(f"the edited file is missing: {m['original_path']}")
                 if fsutil.hash_file(res.parent_fd, res.name, res.st) != m["after_sha256"]:
-                    raise ActionError("編集したファイルが GER の書いた内容から変わっているため戻せません（手で確かめてください）")
+                    raise ActionError("cannot restore: the edited file changed from the content GER wrote (check it by hand)")
         finally:
             res.close()
 
@@ -132,19 +132,19 @@ class RestoreStep:
             try:
                 if m["operation"] == "quarantine":
                     if res.st is not None:
-                        raise ActionError("元の場所に別のものが現れました")
+                        raise ActionError("something else appeared at the original location")
                     base.unlock_payload(efd, m["kind"], m["mode"], m.get("tree_modes"))
                     self.state = "unlocked"
                     if m["kind"] == "tree":
                         got = fsutil.tree_hash(efd, "payload").hash
                         if got != m["hash"]:
-                            raise ActionError("mode を戻したツリーのハッシュが隔離前と一致しません")
+                            raise ActionError("the hash of the tree after restoring modes does not match the hash before quarantine")
                     os.rename("payload", res.name, src_dir_fd=efd, dst_dir_fd=res.parent_fd)
                     self.state = "moved"
                 else:
                     cur = res.lstat()
                     if fsutil.hash_file(res.parent_fd, res.name, cur) != m["after_sha256"]:
-                        raise ActionError("編集したファイルが変わりました")
+                        raise ActionError("the edited file changed")
                     os.link(res.name, "replaced", src_dir_fd=res.parent_fd, dst_dir_fd=efd, follow_symlinks=False)
                     self.state = "linked"
                     base.unlock_payload(efd, "file", m["mode"], None)
@@ -152,14 +152,14 @@ class RestoreStep:
                     self.state = "moved"
                 back = os.stat(res.name, dir_fd=res.parent_fd, follow_symlinks=False)
                 if [back.st_dev, back.st_ino] != list(m["ident"]):
-                    raise ActionError("戻した後の実体が一致しません", applied=True)
+                    raise ActionError("the restored object does not match", applied=True)
             finally:
                 res.close()
         finally:
             os.close(efd)
 
     def rollback(self) -> None:
-        """apply の逆（戻したものを再び隔離する）。"""
+        """Reverse of apply (quarantines restored objects again)."""
         m = self.m
         efd = store.open_entry(self.qid)
         try:
@@ -196,25 +196,25 @@ def prepare(req: dict) -> tuple[list[RestoreStep], list[Rejection]]:
         try:
             m, h = store.read_manifest(qid)
             if h != e["manifest_sha256"]:
-                raise ActionError("マニフェストの SHA-256 が restore-request と一致しません")
+                raise ActionError("the SHA-256 of the manifest does not match the restore-request")
             s = RestoreStep(qid, m, h)
             s.check()
             steps.append(s)
         except FileNotFoundError:
-            rej.append(Rejection("G-7", f"隔離ストアにエントリ {qid} がありません"))
+            rej.append(Rejection("G-7", f"entry {qid} not found in the quarantine store"))
         except (ActionError, fsutil.FsError, store.StoreError, OSError, ValueError, KeyError) as ex:
             msg = str(ex)
             rej.append(Rejection("G-9" if msg.startswith("G-9:") else "G-7", f"{qid}: {msg}"))
     paths = [s.target for s in steps]
     if len(set(paths)) != len(paths):
-        rej.append(Rejection("G-7", "同じ元のパスへ戻すエントリが複数あります（別々の restore にしてください）"))
-    # 後から隔離したものを先に戻す（同じ計画の中では quarantine は編集より後に実行している）
+        rej.append(Rejection("G-7", "several entries restore to the same original path (use separate restores)"))
+    # Restore later quarantines first (within one plan, quarantine runs after the edits)
     steps.sort(key=lambda s: s.qid, reverse=True)
     return steps, rej
 
 
 def run(steps: list[RestoreStep], restore_id: str, at: str) -> tuple[list[dict], bool]:
-    """(results, ok)。途中で失敗したら、戻したものを再び隔離する。"""
+    """(results, ok). If something fails halfway, restored objects are quarantined again."""
     done = []
     results = []
     failed = None
@@ -227,7 +227,7 @@ def run(steps: list[RestoreStep], restore_id: str, at: str) -> tuple[list[dict],
             try:
                 s.rollback()
             except Exception as e2:
-                results.append(_res(s, "failed", f"{type(e).__name__}: {e}; 途中の変更を戻せません: {e2}"))
+                results.append(_res(s, "failed", f"{type(e).__name__}: {e}; cannot undo the partial change: {e2}"))
                 failed = "hard"
                 break
             results.append(_res(s, "failed", f"{type(e).__name__}: {e}"))

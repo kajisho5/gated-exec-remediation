@@ -1,10 +1,10 @@
-"""chmod 操作。外部コマンドを使わず os.fchmod / os.chmod で行う。
+"""chmod operation. Uses os.fchmod / os.chmod, no external commands.
 
-- params は {"mode": "0NNN"}（8 進 3 桁）のみ。setuid / setgid / sticky ビットと world-writable は付与できない
-- 現在の mode に無い権限を足す chmod は G-7 で拒否する（修復は権限を絞る操作に限る）
-- 対象は事前検証時の (st_dev, st_ino, st_ctime_ns) と一致することを適用直前に確認する（差し替え検出）。
-  i-node 番号は削除・再作成で再利用されうるため、ctime も含めて同一実体を判定する
-- 再帰しない。シンボリックリンクは辿らない
+- params is only {"mode": "0NNN"} (3 octal digits). setuid / setgid / sticky bits and world-writable cannot be granted
+- A chmod that adds a permission missing from the current mode is rejected by G-7 (remediation only narrows permissions)
+- Right before applying, checks that the target still matches (st_dev, st_ino, st_ctime_ns) from pre-validation (replacement detection).
+  i-node numbers can be reused after delete and re-create, so ctime is part of the identity check
+- Not recursive. Does not follow symbolic links
 """
 from __future__ import annotations
 
@@ -23,10 +23,10 @@ _MODE = re.compile(r"^0[0-7]{3}$")
 
 def parse_params(params: dict) -> int:
     if set(params) != {"mode"} or not isinstance(params["mode"], str) or not _MODE.fullmatch(params["mode"]):
-        raise ActionError('params は {"mode": "0NNN"}（8 進 3 桁、特殊ビットなし）のみ受け付けます')
+        raise ActionError('params accepts only {"mode": "0NNN"} (3 octal digits, no special bits)')
     mode = int(params["mode"], 8)
-    if mode & 0o002:  # ZET の I-4 と同じ。現在の mode に権限を足さないこと（G-7）とは別に、静的に拒否する
-        raise ActionError("他者の書き込み権限（world-writable）を付ける chmod は受け付けません")
+    if mode & 0o002:  # Same as ZET I-4. Rejected statically, separately from "do not add to the current mode" (G-7)
+        raise ActionError("a chmod that grants write permission to others (world-writable) is not accepted")
     return mode
 
 
@@ -35,14 +35,14 @@ def fmt(mode: int) -> str:
 
 
 def inspect(target: str) -> os.stat_result:
-    """事前検証。対象が通常ファイルかディレクトリで、所有者として変更できることを確認する。"""
+    """Pre-validation. Checks that the target is a regular file or a directory and that the owner can change it."""
     st = os.lstat(target)
     if stat.S_ISLNK(st.st_mode):
-        raise ActionError("シンボリックリンクは対象にできません")
+        raise ActionError("a symbolic link cannot be a target")
     if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
-        raise ActionError("通常ファイルまたはディレクトリのみ対象にできます")
+        raise ActionError("only a regular file or a directory can be a target")
     if os.geteuid() != 0 and st.st_uid != os.geteuid():
-        raise ActionError("所有者ではないため権限を変更できません")
+        raise ActionError("cannot change permissions: not the owner")
     return st
 
 
@@ -58,35 +58,35 @@ def _same(st: os.stat_result, ident: Ident) -> bool:
 
 
 def set_mode(target: str, mode: int, ident: Ident) -> Ident:
-    """ident と同じ実体にだけ mode を設定し、変更後の ident を返す（ロールバック時の照合に使う）。"""
+    """Sets mode only on the same object as ident and returns the ident after the change (used for checks on rollback)."""
     st = os.lstat(target)
     if stat.S_ISLNK(st.st_mode) or not _same(st, ident):
-        raise ActionError("事前検証後に対象が差し替えられました")
+        raise ActionError("the target was replaced after pre-validation")
     flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
     if stat.S_ISDIR(st.st_mode):
         flags |= getattr(os, "O_DIRECTORY", 0)
     try:
         fd = os.open(target, flags)
     except PermissionError:
-        fd = None  # 読み取り権限が無い（例: 0000）。lstat の前後確認で代替する
+        fd = None  # No read permission (for example 0000). The lstat before/after check is used instead
     if fd is not None:
         try:
             if not _same(os.fstat(fd), ident):
-                raise ActionError("事前検証後に対象が差し替えられました")
+                raise ActionError("the target was replaced after pre-validation")
             os.fchmod(fd, mode)
         finally:
             os.close(fd)
     else:
         os.chmod(target, mode)
-    # ここから先の失敗は変更済みの可能性がある（applied=True）
+    # Failures from here on may come after the change (applied=True)
     try:
         after = os.lstat(target)
     except OSError as e:
-        raise ActionError(f"適用後に対象を確認できません: {e}", applied=True) from e
+        raise ActionError(f"cannot check the target after applying: {e}", applied=True) from e
     if stat.S_ISLNK(after.st_mode) or (after.st_dev, after.st_ino) != ident[:2]:
-        raise ActionError("適用中に対象が差し替えられました", applied=True)
+        raise ActionError("the target was replaced while applying", applied=True)
     if after.st_mode & 0o7777 != mode:
-        raise ActionError(f"適用後の権限が {fmt(after.st_mode)} です（期待値 {fmt(mode)}）", applied=True)
+        raise ActionError(f"permissions after applying are {fmt(after.st_mode)} (expected {fmt(mode)})", applied=True)
     return ident_of(after)
 
 
@@ -121,20 +121,20 @@ def rollback_undo(u: dict) -> None:
 
 
 def prepare(ctx, items):
-    """事前検証（G-7 / G-10）。chmod は現在の mode に無い権限を足せない（絞る操作だけ）。"""
+    """Pre-validation (G-7 / G-10). chmod cannot add a permission missing from the current mode (narrowing only)."""
     if len(items) != 1:
-        raise ActionError("chmod は group にまとめられません")
+        raise ActionError("chmod cannot be grouped")
     a = items[0].action
     t = a["target"]
     mode = parse_params(a["params"])
     st = inspect(t)
     if os.path.realpath(t) != t:
-        raise ActionError("パスの途中にシンボリックリンクがあります")
+        raise ActionError("the path contains a symbolic link")
     before = st.st_mode & 0o7777
     added = mode & ~before
-    if added:  # 修復は権限を絞る操作に限る。改ざんされた plan でも権限を緩められないようにする
-        raise ActionError(f"chmod {fmt(mode)} は現在の mode {fmt(before)} に無い権限（{added:04o}）を足します"
-                          "（権限を絞る操作だけを受け付けます）")
+    if added:  # Remediation only narrows permissions, so a tampered plan cannot loosen them either
+        raise ActionError(f"chmod {fmt(mode)} adds permissions ({added:04o}) missing from the current mode {fmt(before)}"
+                          " (only operations that narrow permissions are accepted)")
     step = ChmodStep(items, t, mode, ident_of(st), before)
     step.st = st
     return step

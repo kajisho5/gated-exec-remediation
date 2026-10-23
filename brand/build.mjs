@@ -1,9 +1,9 @@
-// brand/src から全ブランド資産を生成する（fresnel の scripts/brand.ts と同じ資産表）。
+// Generates every brand asset from brand/src (same asset table as fresnel's scripts/brand.ts).
 //
 //   cd brand && npm ci && npm run build
 //
-// 1. fresnel CLI（fresnel-icon、package-lock でバージョン固定）で src/spec.json → AppIcon.icon
-// 2. fresnel のレンダラで logo/*.svg・png/*.png・web/*・social/*.png を書き出す
+// 1. fresnel CLI (fresnel-icon, version pinned by package-lock): src/spec.json -> AppIcon.icon
+// 2. fresnel's renderer writes logo/*.svg, png/*.png, web/* and social/*.png
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -19,17 +19,17 @@ const out = (...p) => {
 const brand = JSON.parse(readFileSync(join(root, 'src/brand.json'), 'utf8'));
 const wm = JSON.parse(readFileSync(join(root, 'src/wordmark.json'), 'utf8'));
 
-// ---------------------------------------------------------------- .icon（fresnel CLI）
+// ---------------------------------------------------------------- .icon (fresnel CLI)
 const cliPath = createRequire(import.meta.url).resolve('fresnel-icon/dist/cli.js');
 rmSync(join(root, 'AppIcon.icon'), { recursive: true, force: true });
 execFileSync(process.execPath, [cliPath, 'build', 'spec.json', '-o', '../AppIcon.icon'], { cwd: join(root, 'src'), stdio: 'inherit' });
 execFileSync(process.execPath, [cliPath, 'validate', '../AppIcon.icon'], { cwd: join(root, 'src'), stdio: 'inherit' });
 
-// fresnel-icon 0.2.2 はレンダラを公開 API として export していないため、同梱の dist/cli.js から
-// CLI 起動部（末尾の main() 呼び出し）を外した ES モジュールを node_modules 内に作って読み込む。
+// fresnel-icon 0.2.2 does not export the renderer as a public API, so an ES module is built inside node_modules
+// from the bundled dist/cli.js without the CLI start-up part (the main() call at the end) and loaded.
 const cliSrc = readFileSync(cliPath, 'utf8').replace(/^#!.*\n/, '');
 const mainAt = cliSrc.lastIndexOf('main().catch(');
-if (mainAt < 0 || !/function renderSvg\(/.test(cliSrc)) throw new Error('fresnel-icon の dist/cli.js が想定と異なります（バージョンを確認）');
+if (mainAt < 0 || !/function renderSvg\(/.test(cliSrc)) throw new Error('fresnel-icon dist/cli.js is not as expected (check the version)');
 const libPath = join(dirname(cliPath), 'brand-lib.mjs');
 writeFileSync(libPath, cliSrc.slice(0, mainAt) + 'export { loadIcon, renderSvg, renderPng, flattenPng, svgToPng };\n');
 const { loadIcon, renderSvg, renderPng, flattenPng, svgToPng } = await import(pathToFileURL(libPath).href);
@@ -37,9 +37,9 @@ const doc = await loadIcon(join(root, 'AppIcon.icon'));
 
 // ---------------------------------------------------------------- wordmark
 const [wx0, wy0, wx1] = wm.bbox;
-const asc = -wy0; // アセンダ上端〜ベースライン。降りは無視してベースラインで揃える
+const asc = -wy0; // Ascender top to baseline. Descenders are ignored; aligned on the baseline
 const wordmarkWidth = (h) => ((wx1 - wx0) * h) / asc;
-/** 高さ h（アセンダ〜ベースライン）、左上 (x, y) */
+/** Height h (ascender to baseline), top left (x, y) */
 const wordmark = (x, y, h, fill) => `<path fill="${fill}" transform="translate(${x} ${y + h}) scale(${h / asc}) translate(${-wx0} 0)" d="${wm.d}"/>`;
 const iconInline = (x, y, size, prefix, appearance = 'default') => renderSvg(doc, { size, appearance, idPrefix: prefix }).replace('<svg ', `<svg x="${x}" y="${y}" `);
 
@@ -59,7 +59,7 @@ writeFileSync(out(`logo/${id}-logo-dark.svg`), lockup(true));
 writeFileSync(out(`logo/${id}-logo-light.svg`), lockup(false));
 for (const [name, fill] of [['white', '#F5F5F7'], ['black', '#1D1D1F']]) {
   const h = 96;
-  const d = Math.ceil(h * 0.3); // 降り（g など）の分
+  const d = Math.ceil(h * 0.3); // Room for descenders (g and so on)
   const w = Math.ceil(wordmarkWidth(h)) + 4;
   writeFileSync(out(`logo/${id}-wordmark-${name}.svg`), `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h + d}" viewBox="0 0 ${w} ${h + d}"><title>${wm.text}</title>${wordmark(2, 0, h, fill)}</svg>\n`);
 }
@@ -76,7 +76,7 @@ writeFileSync(out('web/favicon-64.png'), await renderPng(doc, { size: 64 }));
 const ico = [16, 32, 48];
 const icoPngs = await Promise.all(ico.map((s) => renderPng(doc, { size: s, rim: s >= 32 })));
 writeFileSync(out('web/favicon.ico'), encodeIco(ico.map((s, i) => ({ size: s, png: icoPngs[i] }))));
-// Apple touch icon: 不透明・マスクなし（iOS 側がマスクを掛ける）
+// Apple touch icon: opaque, no mask (iOS applies the mask)
 writeFileSync(out('web/apple-touch-icon.png'), flattenPng(await renderPng(doc, { size: 180, mask: 'none', rim: false })));
 writeFileSync(out('web/icon-192.png'), await renderPng(doc, { size: 192 }));
 writeFileSync(out('web/icon-512.png'), await renderPng(doc, { size: 512 }));

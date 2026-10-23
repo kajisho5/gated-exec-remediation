@@ -1,12 +1,12 @@
-"""remove_line 操作 — 可逆（シェルの rc、git config、php.ini、ld.so.preload、/etc/cron.d）。
+"""remove_line operation - reversible (shell rc files, git config, php.ini, ld.so.preload, /etc/cron.d).
 
-params: {"lines": [{"n": 2, "sha256": "<その行（改行を除く）の SHA-256>", "pattern_id": "sh.ld_preload"}],
+params: {"lines": [{"n": 2, "sha256": "<SHA-256 of that line (without the newline)>", "pattern_id": "sh.ld_preload"}],
          "file_sha256", "expected_after_sha256"}
-- 行 n のハッシュが一致し、その行の全体が pattern_id の正規表現（hazards.LINE_H）に一致すること（T-1）
-- 行末が \\ で続く行・前の行が \\ で終わる行は拒否。シェルの rc では、ヒアドキュメント・関数定義・if / case /
-  for / while ブロックの中の行は拒否する（GER の簡単な字句判定で分からなければ拒否）
-- CRLF・BOM はそのまま保つ。取り除いた行以外のバイトが変わらないことを確かめる（T-3）
-行の内容は計画にもログにも入れず、ハッシュだけで扱う。
+- The hash of line n must match and the whole line must match the regular expression of pattern_id (hazards.LINE_H) (T-1)
+- A line continued with a trailing \\ or following a line ending in \\ is rejected. In shell rc files, lines inside a here-document, a function definition or an if / case /
+  for / while block are rejected (rejected whenever GER's simple lexical check cannot tell)
+- CRLF and BOM are kept as they are. Checks that no byte other than the removed lines changes (T-3)
+Line contents are never written to the plan or the logs; they are handled by hash only.
 """
 from __future__ import annotations
 
@@ -27,24 +27,24 @@ BOM = b"\xef\xbb\xbf"
 
 def validate_params(params: dict) -> None:
     if not isinstance(params, dict) or set(params) != {"lines", "file_sha256", "expected_after_sha256"}:
-        raise ActionError('params は {"lines", "file_sha256", "expected_after_sha256"} であること（ger preview で作る）')
+        raise ActionError('params must be {"lines", "file_sha256", "expected_after_sha256"} (built by ger preview)')
     edit_common.check_sha(params["file_sha256"], "file_sha256")
     edit_common.check_sha(params["expected_after_sha256"], "expected_after_sha256")
     lines = params["lines"]
     if not isinstance(lines, list) or not 1 <= len(lines) <= MAX_LINES:
-        raise ActionError(f"params.lines は 1〜{MAX_LINES} 件であること")
+        raise ActionError(f"params.lines must have 1-{MAX_LINES} entries")
     for ln in lines:
         if not isinstance(ln, dict) or set(ln) != {"n", "sha256", "pattern_id"}:
-            raise ActionError('lines[] は {"n", "sha256", "pattern_id"} であること')
+            raise ActionError('lines[] must be {"n", "sha256", "pattern_id"}')
         if not isinstance(ln["n"], int) or isinstance(ln["n"], bool) or ln["n"] < 1:
-            raise ActionError("lines[].n は 1 以上の整数")
+            raise ActionError("lines[].n must be an integer of 1 or more")
         if ln["pattern_id"] not in hazards.LINE_H:
-            raise ActionError(f"lines[].pattern_id は GER の表にある id であること（{', '.join(hazards.LINE_H)}）")
+            raise ActionError(f"lines[].pattern_id must be an id from GER's table ({', '.join(hazards.LINE_H)})")
         edit_common.check_sha(ln["sha256"], "lines[].sha256")
 
 
 def split(data: bytes) -> list[tuple[bytes, bytes]]:
-    """[(内容（改行・BOM を除く）, 行全体（改行を含む）)]。区切りは \\n だけ（\\r\\n の \\r は内容から除く）。"""
+    """[(content (without newline and BOM), whole line (with newline))]. Only \\n separates lines (the \\r of \\r\\n is removed from the content)."""
     out = []
     i, n = 0, len(data)
     while i < n:
@@ -66,7 +66,7 @@ _CLOSE = {"fi", "esac", "done"}
 
 
 def _strip_shell(code: str) -> str:
-    """引用符の中・パラメータ展開・コマンド置換・コメントを取り除く（字句判定の近似）。"""
+    """Removes quoted text, parameter expansions, command substitutions and comments (an approximation for the lexical check)."""
     out, q, i = [], None, 0
     while i < len(code):
         c = code[i]
@@ -97,7 +97,7 @@ def _strip_shell(code: str) -> str:
 
 
 def shell_safe_lines(contents: list[str]) -> list[bool]:
-    """各行が「最上位の単純な 1 行」か（ヒアドキュメント・ブロック・継続行の中ではない）。分からなければ False。"""
+    """Whether each line is "a simple top-level line" (not inside a here-document, a block or a continued line). False when unsure."""
     safe = []
     heredoc = None
     depth = 0
@@ -161,20 +161,20 @@ def compute(path: str, data: bytes, lines: list) -> bytes:
     contents = [c.decode("utf-8", "surrogateescape") for c, _ in parts]
     nums = [ln["n"] for ln in lines]
     if len(set(nums)) != len(nums):
-        raise ActionError("同じ行が 2 回指定されています")
+        raise ActionError("the same line is given twice")
     for ln in lines:
         n, pid = ln["n"], ln["pattern_id"]
         if n > len(parts):
-            raise ActionError(f"{n} 行目がありません")
+            raise ActionError(f"line {n} not found")
         fpred, rx, _kind = hazards.LINE_H[pid]
         if not fpred(path):
-            raise ActionError(f"pattern {pid} はこのファイルの種類には使えません（T-1）")
+            raise ActionError(f"pattern {pid} cannot be used for this kind of file (T-1)")
         if sha256(parts[n - 1][0]) != ln["sha256"]:
-            raise ActionError(f"{n} 行目の内容が preview の時から変わっています（sha256 と不一致）")
+            raise ActionError(f"the content of line {n} changed since preview (does not match sha256)")
         if not rx.fullmatch(contents[n - 1]):
-            raise ActionError(f"{n} 行目は危険パターン {pid} に一致しません。取り除けません（T-1）")
+            raise ActionError(f"line {n} does not match hazard pattern {pid}; it cannot be removed (T-1)")
         if not _contexts(path, contents, pid)[n - 1]:
-            raise ActionError(f"{n} 行目は継続行・ヒアドキュメント・ブロックの中にある（または判定できない）ため取り除けません")
+            raise ActionError(f"line {n} cannot be removed: it is inside a continued line, a here-document or a block (or this cannot be determined)")
     drop = set(nums)
     out = bytearray()
     for i, (_c, full) in enumerate(parts, 1):
@@ -184,14 +184,14 @@ def compute(path: str, data: bytes, lines: list) -> bytes:
             continue
         out += full
     new = bytes(out)
-    # T-3: 取り除いた行以外のバイトが変わらないこと（別の経路で作り直して比べる）
+    # T-3: no byte other than the removed lines changes (rebuilt by a separate path and compared)
     chunks = re.split(b"(?<=\n)", data)
     chunks = [c for c in chunks if c]
     alt = b"".join(c for i, c in enumerate(chunks, 1) if i not in drop)
     if 1 in drop and data.startswith(BOM):
         alt = BOM + alt
     if alt != new:
-        raise ActionError("取り除いた行以外の内容が変わります（T-3）")
+        raise ActionError("content other than the removed lines would change (T-3)")
     return new
 
 
@@ -208,7 +208,7 @@ def preview(ctx, items) -> PreviewResult:
     contents = [c.decode("utf-8", "surrogateescape") for c, _ in parts]
     pids = hazards.line_patterns_for(target)
     if not pids:
-        raise ActionError("このファイルの種類には remove_line の危険パターンがありません")
+        raise ActionError("this kind of file has no remove_line hazard pattern")
     lines = []
     explicit = [ln for it in items for ln in it.action["params"].get("lines", [])]
     for i, c in enumerate(contents, 1):
@@ -219,7 +219,7 @@ def preview(ctx, items) -> PreviewResult:
                 lines.append({"n": i, "sha256": sha256(parts[i - 1][0]), "pattern_id": pid})
                 break
     if not lines:
-        raise ActionError("取り除ける行（危険パターンに一致する最上位の 1 行）が見つかりません")
+        raise ActionError("no removable line found (a top-level line matching a hazard pattern)")
     new = compute(target, data, lines)
     params = {"lines": lines, "file_sha256": sha256(data), "expected_after_sha256": sha256(new)}
     validate_params(params)

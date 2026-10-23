@@ -1,68 +1,70 @@
 ---
 name: gated-exec-remediation
-description: GER（Gated-Exec Remediation）修復層スキル。ZET が確定した修復計画（remediation-plan.json）を、人間の明示承認・dry-run・許可リストのゲート G-1〜G-10 を通過した場合にだけ実行する。Phase 1 の操作は quarantine（隔離ストアへ移す。削除しない）・edit_json / edit_toml / remove_line / disable_mcp_server（GER の危険パターンの表に一致するものを取り除くだけ）・checklist（手作業の記録）・chmod。失敗時は全件ロールバックし、隔離したものは ger restore で戻せる。承認の代行・dry-run の省略・計画外の変更・隔離ストアの削除・ロックファイルの書き換え・秘密情報のローテーションは行わない。
+description: Remediation-layer skill of GER (Gated-Exec Remediation). Executes a remediation plan finalized by ZET (remediation-plan.json) only when it passes gates G-1 to G-10 (explicit human approval, dry-run, allowlist). Phase 1 operations are quarantine (move into the quarantine store; nothing is deleted), edit_json / edit_toml / remove_line / disable_mcp_server (remove only what matches GER's hazard tables), checklist (record manual work) and chmod. On failure everything is rolled back, and quarantined objects can be moved back with ger restore. It never approves on anyone's behalf, skips a dry-run, makes changes outside the plan, deletes from the quarantine store, rewrites lockfiles or rotates secrets.
 ---
 
-# GER 修復スキル（gated-exec-remediation）
+# GER remediation skill (gated-exec-remediation)
+
+**Language**: this file is in English, but answer the user in the language they use (for example, reply in Japanese to a user who writes in Japanese). Keep identifiers, paths, JSON keys, gate codes (G-1 to G-10) and command output as they are.
 
 ```
 [ZET] remediation-plan.json ─┐
-人間の承認（approval）───────┼─▶ [GER] G-1〜G-8 ─▶ dry-run ─▶ apply ─▶ remediation-log.json
+human approval (approval) ───┼─▶ [GER] G-1 to G-8 ─▶ dry-run ─▶ apply ─▶ remediation-log.json
 allowed_actions ─────────────┘
 ```
 
-## 絶対ルール
+## Absolute rules
 
-1. **承認を代行しない**: `approval.approved_by` と `approval_token` は人間が確定 plan の `plan_hash` を見て承認したものだけを使う。AI が承認者として名前を書かない。
-2. **実行者は承認者ではない**: `--operator` に承認者と同じ名前を使わない（G-4 で拒否される）。
-3. **apply の前に必ず dry-run**: 同じ入力（mode 以外）で dry-run を成功させ、結果（before / after）を人間に見せてから apply する。
-4. **計画を書き換えない**: plan を 1 文字でも変えると `plan_hash` が変わり、承認が無効になる（G-3）。変更が必要なら ZET でやり直す。`plan_hash` を計算し直して承認をやり直させるのも禁止（承認トークンは完全性しか示さず、書き換えを暗号的には検出できない。GER は plan だけで評価できる ZET の不変条件を再検査し、chmod は権限を絞る操作しか受け付けないが、それに頼らない）。
-5. **findings.json を読まない・渡さない**: 修復層の入力は確定 plan だけ（G-1）。
-6. **ゲートを回避しない**: 拒否されたら理由（G-番号）をそのまま報告する。ログディレクトリや TTL・隔離ストアの場所を変えて通そうとしない。
-7. **preview の拒否は checklist にする**: `ger preview` が拒否した自動修復（RECORD の無い dist-info、ドット区切りの TOML など）を、params を手で作って通そうとしない。ZET の提案の checklist に切り替える。
-8. **隔離ストアから削除しない**: `~/.local/state/ger/quarantine` の中身を消さない・書き換えない（restore とロールバックができなくなり、証拠も失う）。削除は人間が判断する。
-9. **restore も人間の承認**: restore-request の承認者（2 名以上）を AI が書かない。
-10. **checklist の確認を偽らない**: `ger confirm` は、その手順を実際に行った作業者の名前で、行った後にだけ記録する。ローテーションなど外部の作業は GER が検証できず `self_attested` と記録されることを報告に書く。
-11. **自動化しないものを実行しない**: ロックファイルの手での書き換え、`launchctl` / `systemctl` / `crontab` の実行、秘密情報の失効、git 履歴の書き換えは GER の範囲外。チェックリストの手順として人間に渡す。
+1. **Never approve on anyone's behalf**: use only an `approval.approved_by` and `approval_token` that a human gave after looking at the `plan_hash` of the finalized plan. The AI never writes its own name as an approver.
+2. **The operator is not an approver**: do not use an approver's name for `--operator` (G-4 rejects it).
+3. **Always dry-run before apply**: run a successful dry-run with the same input (except mode), show the result (before / after) to a human, then apply.
+4. **Never rewrite the plan**: changing even one character of the plan changes `plan_hash` and invalidates the approval (G-3). If a change is needed, start again in ZET. Recomputing `plan_hash` and asking for a new approval is also forbidden (the approval token only shows integrity and cannot detect a rewrite cryptographically; GER checks again the ZET invariants that can be evaluated from the plan alone and accepts only chmod operations that narrow permissions, but do not rely on that).
+5. **Never read or pass findings.json**: the only input of the remediation layer is the finalized plan (G-1).
+6. **Never get around a gate**: when rejected, report the reason (the G number) as it is. Do not try to pass by changing the log directory, the TTL or the location of the quarantine store.
+7. **A preview rejection becomes a checklist**: do not try to pass an automatic remediation rejected by `ger preview` (a dist-info without RECORD, dotted TOML keys, and so on) by writing params by hand. Switch to the checklist of ZET's proposal.
+8. **Never delete from the quarantine store**: do not delete or rewrite the contents of `~/.local/state/ger/quarantine` (restore and rollback would become impossible and evidence would be lost). Deletion is a human decision.
+9. **restore also needs human approval**: the AI never writes the approvers (2 or more) of a restore-request.
+10. **Never fake a checklist confirmation**: record `ger confirm` only after the step was actually done, under the name of the worker who did it. For external work such as a rotation, state in the report that GER cannot verify it and records it as `self_attested`.
+11. **Never run what is not automated**: rewriting lockfiles by hand, running `launchctl` / `systemctl` / `crontab`, revoking secrets and rewriting git history are outside GER's scope. Hand them to a human as checklist steps.
 
-## 手順
+## Steps
 
 ```bash
-# 1. 入力を組み立てる（approval は人間が plan_hash を確認して記入）
-#    {schema_version:"1.0", plan:<ZET 確定 plan>, mode:"dry-run", allowed_actions:["chmod"],
+# 1. Build the input (a human fills in approval after checking plan_hash)
+#    {schema_version:"1.0", plan:<plan finalized by ZET>, mode:"dry-run", allowed_actions:["chmod"],
 #     approval:{plan_id, approved_by:[...], approved_at, approval_token:<plan.plan_hash>}}
-# 0. 下書きの action の params を埋める（変更しない。拒否されたものはチェックリストに）
+# 0. Fill the params of the draft actions (changes nothing; rejected ones become checklists)
 bin/ger preview draft-plan.json --operator <name> -o previewed-plan.json --report preview-report.json --diff
-#    → zet finalize → 人間が plan_hash を承認
+#    -> zet finalize -> a human approves plan_hash
 bin/ger verify  ger-input.json --operator <name>
 bin/ger dry-run ger-input.json --operator <name> -o dry-run-log.json
-# 2. dry-run-log.json の before / after を人間に確認してもらう
-# 3. 入力の mode を "apply" に変えて実行（他は一切変えない）
+# 2. Have a human check before / after in dry-run-log.json
+# 3. Change mode in the input to "apply" and run (change nothing else)
 bin/ger apply   ger-input.apply.json --operator <name> -o apply-log.json
-# 監査ログのハッシュチェーンの確認
+# Check the hash chain of the audit log
 bin/ger verify-log
-# 4. 残った手作業（apply が表示する [手作業]）を人間が行い、行った人が記録する
-bin/ger confirm ger-input.apply.json --operator <作業者> --item <finding_id> --step CL-IR:s1
-# 5. ZES で再スキャンする。戻す必要があれば（承認者 2 名の restore-request で dry-run → apply）
+# 4. A human does the remaining manual work (the [manual] lines printed by apply), and the person who did it records it
+bin/ger confirm ger-input.apply.json --operator <worker> --item <finding_id> --step CL-IR:s1
+# 5. Rescan with ZES. If something must be moved back (restore-request with 2 approvers; dry-run -> apply)
 bin/ger quarantine-list --json
 bin/ger restore restore-request.json --operator <name> -o restore-log.json
-# apply が終了コード 5 で終わった・途中で落ちた場合
+# If apply ended with exit code 5 or died halfway
 bin/ger recover ger-input.apply.json --operator <name> -o recover-log.json
 ```
 
-- dry-run 記録は 1 回の apply で使い切る。もう一度 apply するには dry-run からやり直す
-- 承認は `approved_at` から 7 日（`GER_APPROVAL_MAX_AGE`）で失効し、remediate の `due_at` の最大値を過ぎた計画も実行しない。ZET と承認をやり直す
-- ZET が `--now` で作った計画（`now_override: true`）は実行しない（テスト専用）
+- A dry-run record is used up by one apply. To apply again, start again from the dry-run
+- An approval expires 7 days after `approved_at` (`GER_APPROVAL_MAX_AGE`), and a plan past the latest remediate `due_at` is not executed either. Redo ZET and the approval
+- A plan made by ZET with `--now` (`now_override: true`) is not executed (for tests only)
 
-## 終了コードと報告
+## Exit codes and reporting
 
-| コード | 意味 | 報告すること |
+| Code | Meaning | What to report |
 |---|---|---|
-| 0 | 成功 | applied / skipped の件数 |
-| 3 | ゲートで拒否（何も変更していない） | 拒否した G-番号と理由 |
-| 4 | 実行中に失敗し、全件ロールバック済み | 失敗した対象と理由 |
-| 5 | ロールバックも完了できなかった | **至急人間に連絡**。remediation-log の対象と状態をそのまま伝える |
+| 0 | Success | Counts of applied / skipped |
+| 3 | Rejected by a gate (nothing changed) | The rejecting G numbers and reasons |
+| 4 | Failed during execution; everything rolled back | The failed target and the reason |
+| 5 | The rollback could not be completed either | **Contact a human immediately.** Pass on the targets and states in remediation-log as they are |
 
-## ゲート
+## Gates
 
-G-1 スキーマ・版固定・findings 禁止・plan だけで評価できる ZET の不変条件・操作ごとの params / G-2 確定 plan のみ・now_override の計画と期限切れの計画は不可 / G-3 承認と plan_hash の束縛・承認の有効期限 / G-4 自己承認防止 / G-5 allowed_actions かつ GER 対応の操作のみ（未対応を含む計画は全体を拒否） / G-6 不可逆操作と、exec / network / spend / send を宣言したスキルへの操作は承認者 2 名以上（後者は allowed_actions の明示も） / G-7 対象の全件事前検証（絶対パス・シンボリックリンク不可・所有者・重複なし・権限を足さない chmod・evidence_hash の一致） / G-8 有効期限内で未使用の同一 dry-run 記録（apply のみ） / G-9 承認された検査範囲（plan.scope）・保護対象・root が必要な対象は承認者 2 名・対象と finding の関係を GER がファイルシステムから導き直す / G-10 定義 T（取り除くのは GER の表 H に一致するものだけ、足すのは定数表 K の値だけ、パースし直して一致）
+G-1 schema, pinned versions, no findings, the ZET invariants that can be evaluated from the plan alone, params per operation / G-2 finalized plans only; plans with now_override and expired plans are not allowed / G-3 binding of the approval to plan_hash, approval expiry / G-4 no self-approval / G-5 only operations in allowed_actions that GER supports (a plan with an unsupported one is rejected as a whole) / G-6 irreversible operations and operations on skills that declare exec / network / spend / send need 2 or more approvers (the latter also an explicit allowed_actions entry) / G-7 pre-validation of every target (absolute path, no symbolic links, owner, no duplicates, chmod that adds no permission, evidence_hash matches) / G-8 an unexpired, unused dry-run record of the same input (apply only) / G-9 the approved scan scope (plan.scope), protected targets, 2 approvers for targets that require root, GER derives the relation between target and finding again from the file system / G-10 definition T (remove only what matches GER's table H, add only values from the constant table K, the re-parsed result must match)

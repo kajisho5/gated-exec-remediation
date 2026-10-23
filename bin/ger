@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# GER 起動スクリプト。外部コマンドを使わず（bash 組み込みのみで）パスを解決し、
-# python3 -I -S（環境変数・site（.pth を含む）・カレントディレクトリを無視）で実行する。
+# GER launcher. Resolves paths without external commands (bash builtins only) and runs
+# python3 -I -S (ignores environment variables, site (including .pth files) and the current directory).
 set -euo pipefail
 SELF="${BASH_SOURCE[0]}"
 case "$SELF" in */*) ;; *) SELF="./$SELF" ;; esac

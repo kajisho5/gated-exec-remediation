@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/kajisho5/gated-exec-remediation/schemas/ger-input.schema.json",
   "title": "GER ger-input.json",
-  "description": "GER（修復層）の入力。plan は ZET の remediation-plan.schema.json（schemas/vendor、版固定）で別途検証する。findings.json を含めてはならない（飛び越し禁止）。未知フィールドは拒否（strict）。",
+  "description": "Input of GER (remediation layer). plan is validated separately with ZET's remediation-plan.schema.json (schemas/vendor, pinned version). Must not contain findings.json (no skipping a layer). Unknown fields are rejected (strict).",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "plan", "approval", "mode", "allowed_actions"],
@@ -17,13 +17,13 @@
         "plan_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
         "approved_by": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/person" } },
         "approved_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
-        "approval_token": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "承認対象 plan の plan_hash" }
+        "approval_token": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "plan_hash of the approved plan" }
       }
     },
     "mode": { "enum": ["dry-run", "apply"] },
     "allowed_actions": {
       "type": "array", "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$", "description": "ワイルドカード不可。操作種別を明示する" }
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$", "description": "No wildcards. Name the operation types explicitly" }
     }
   },
   "$defs": {

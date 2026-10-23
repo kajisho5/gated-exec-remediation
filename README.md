@@ -13,10 +13,8 @@ English | [日本語](README.ja.md)
 
 ```
 [ZES] findings.json ──▶ [ZET] remediation-plan.json ──▶ [GER] remediation-log.json
-        検知（実行なし）        判断（実行なし）              修復（ゲート付き実行）
+     detection (no exec)      decision (no exec)        remediation (gated exec)
 ```
-
-(Detection, no execution → decision, no execution → remediation, gated execution.)
 
 - **Gates G-1 to G-10**: if any single gate fails, nothing is changed
 - **Approval is bound to the plan's content**: `approval_token` is the finalized plan's `plan_hash`. Changing the plan after approval stops execution (this proves integrity, not authenticity; see [Approval](#approval))
@@ -49,7 +47,7 @@ Run on ZES's own fixtures (53 fixture trees, 331 findings including the shared t
 ```bash
 bin/ger verify  ger-input.json --operator ops
 bin/ger dry-run ger-input.json --operator ops -o dry-run-log.json
-bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode だけ "apply" に変えた入力
+bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # the same input with only mode changed to "apply"
 bin/ger verify-log
 
 # Phase 1
@@ -69,7 +67,7 @@ Input ([schemas/ger-input.schema.json](schemas/ger-input.schema.json)):
 ```json
 {
   "schema_version": "1.0",
-  "plan": { "...": "ZET の確定 remediation-plan.json" },
+  "plan": { "...": "remediation-plan.json finalized by ZET" },
   "approval": {
     "plan_id": "<plan.plan_id>",
     "approved_by": ["security-lead"],
@@ -130,7 +128,7 @@ Several findings on the same file (for example the §2 and §15 findings on one 
 
 | # | Rejected when |
 |---|---|
-| G-1 | Schema mismatch (strict and version-pinned for both input and plan; `params` must match [schemas/actions.schema.json](schemas/actions.schema.json) and the action's own checks; a plan 1.0 may only contain chmod; a plan 1.1 action needs `relation`, `finding_path` and `evidence`, and only a checklist may have a null target; `skillpact_effects` may hold only the six SkillPact 0.8 effects), the input contains `findings`, mode does not match the command, a remediate item has a duplicate `finding_id` (results could not be mapped one-to-one to items), `approved_at` / `created_at` / any item timestamp is a nonexistent date-time (February 30, hour 25, etc.), or an object in the input JSON has duplicate keys or nesting deeper than 64 levels. Also the ZET invariants that need no findings or policy (messages say `ZET I-n 相当`): a finding_id appears more than once across items and held (I-1); an exception without exception_type / reason / recheck_at or without an approver, exception_type on a non-exception, a non-INFO defer without reason / recheck_at, or the decider among the item's approvers (I-3); a remediate without owner / due_at / action, an action on a non-remediate, or a target that is not a normalized absolute path (no `.`, `..` or repeated `/`, including a leading `//`) (I-4); a divergence finding as an exception (I-5), duplicate item approvers, fewer than 2 item approvers for a diff_anomaly finding or for a remediate whose skill declares exec / network / spend / send (I-6), a signed finding with a divergence below CRITICAL (I-7), or `skillpact_effects` differing from the item's `skillpact.declared_effects`; decided_at before created_at or in the future, or due_at / recheck_at before decided_at (I-9); a partial plan with an empty held (I-12) |
+| G-1 | Schema mismatch (strict and version-pinned for both input and plan; `params` must match [schemas/actions.schema.json](schemas/actions.schema.json) and the action's own checks; a plan 1.0 may only contain chmod; a plan 1.1 action needs `relation`, `finding_path` and `evidence`, and only a checklist may have a null target; `skillpact_effects` may hold only the six SkillPact 0.8 effects), the input contains `findings`, mode does not match the command, a remediate item has a duplicate `finding_id` (results could not be mapped one-to-one to items), `approved_at` / `created_at` / any item timestamp is a nonexistent date-time (February 30, hour 25, etc.), or an object in the input JSON has duplicate keys or nesting deeper than 64 levels. Also the ZET invariants that need no findings or policy (messages say `ZET I-n equivalent`): a finding_id appears more than once across items and held (I-1); an exception without exception_type / reason / recheck_at or without an approver, exception_type on a non-exception, a non-INFO defer without reason / recheck_at, or the decider among the item's approvers (I-3); a remediate without owner / due_at / action, an action on a non-remediate, or a target that is not a normalized absolute path (no `.`, `..` or repeated `/`, including a leading `//`) (I-4); a divergence finding as an exception (I-5), duplicate item approvers, fewer than 2 item approvers for a diff_anomaly finding or for a remediate whose skill declares exec / network / spend / send (I-6), a signed finding with a divergence below CRITICAL (I-7), or `skillpact_effects` differing from the item's `skillpact.declared_effects`; decided_at before created_at or in the future, or due_at / recheck_at before decided_at (I-9); a partial plan with an empty held (I-12) |
 | G-2 | plan.status is anything other than ok / partial (draft, error); the plan carries `now_override: true` (made by ZET with `--now`) and `GER_ALLOW_NOW_OVERRIDE` is not `1`; or the current time is past the largest `due_at` of the remediate items (the plan has expired; triage again in ZET) |
 | G-3 | plan_hash does not match the body, approval.plan_id does not match, approval_token ≠ plan_hash, approved_at is in the future or before the plan was created, or the approval is older than `GER_APPROVAL_MAX_AGE` seconds (default 7 days) |
 | G-4 | `--operator` is among the approvers (names are compared case-insensitively) |
@@ -160,8 +158,8 @@ During execution, a change is made only if the object's identity matches the one
 ## Tests
 
 ```bash
-tests/run-tests.sh   # 単体テスト＋ strace による外部プロセス・ネットワークゼロ検証
-ZES_HOME=/path/to/zero-exec-shield ZET_HOME=/path/to/zero-exec-triage tests/run-e2e.sh   # E2E（ZES が無ければ SKIP）
+tests/run-tests.sh   # unit tests + zero external process / zero network check with strace
+ZES_HOME=/path/to/zero-exec-shield ZET_HOME=/path/to/zero-exec-triage tests/run-e2e.sh   # E2E (SKIP if ZES is missing)
 ```
 
 `run-tests.sh` runs the unit tests (every action on real files in a temporary directory: accept and reject cases, rollback after a mid-plan failure, a failed rollback followed by `ger recover`, a crash followed by `ger recover`, restore round trips, tampered plans re-hashed after approval, swapped targets and symlinked parents, a tampered quarantine store, and a fixed test vector for the `ger-tree-v1` tree hash) plus an strace run of every command over a plan with every action type, which must show no `execve` other than bash/python3 and no network system call.

@@ -1,11 +1,11 @@
-"""操作の共通部品: 例外、item / ステップの型、隔離ストアへの移動と戻し、ファイルの差し替え。
+"""Shared parts of the operations: exceptions, item / step types, moving into and out of the quarantine store, replacing files.
 
-各操作のモジュールは次を持つ:
-  TYPE, REVERSIBLE, DESTRUCTIVE（承認者 2 名を要するか）, ORDER（実行順。参照を取り除く編集 → quarantine → chmod → checklist）
-  validate_params(params)               形の検査（actions.schema.json に加えて意味の検査）
-  prepare(ctx, items) -> Step           事前検証（G-7 / G-9 / G-10）。変更はしない
-  preview(ctx, items) -> PreviewResult  ger preview 用。params の派生値（ハッシュ・ops）を埋める。変更はしない
-Step は apply(rt) / rollback(rt) を持ち、undo（JSON にできる dict）をジャーナルに残す。
+Each operation module has:
+  TYPE, REVERSIBLE, DESTRUCTIVE (whether 2 approvers are required), ORDER (execution order: edits that remove references -> quarantine -> chmod -> checklist)
+  validate_params(params)               shape check (meaning checks on top of actions.schema.json)
+  prepare(ctx, items) -> Step           pre-validation (G-7 / G-9 / G-10). Changes nothing
+  preview(ctx, items) -> PreviewResult  for ger preview. Fills the derived params values (hashes, ops). Changes nothing
+A Step has apply(rt) / rollback(rt) and leaves undo (a dict that can be JSON) in the journal.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from ..fsutil import FsError, Resolved, ident_of
 
 
 class ActionError(Exception):
-    """applied=True は「変更は既に行われた可能性があり、検証できなかった」ことを示す（ロールバック不能）。"""
+    """applied=True means "the change may already have been made and could not be verified" (rollback not possible)."""
 
     def __init__(self, message: str, applied: bool = False):
         super().__init__(message)
@@ -54,7 +54,7 @@ class PreviewResult:
 
 
 class Runtime:
-    """1 回の apply / restore / recover の実行時情報（隔離ストアの run とジャーナル）。"""
+    """Runtime information of one apply / restore / recover (the quarantine store run and the journal)."""
 
     def __init__(self, run_id: str, journal, plan_id: str | None, plan_hash: str | None, clock):
         self.run_id, self.journal, self.plan_id, self.plan_hash, self.clock = run_id, journal, plan_id, plan_hash, clock
@@ -106,15 +106,15 @@ class Step:
 
 
 def same_group_params(items: list[Item], keys=None) -> dict:
-    """group の item の params が一致すること（quarantine など、まとめても 1 回の操作になるもの）。"""
+    """The params of the group's items must match (for operations such as quarantine that stay one operation when grouped)."""
     p0 = items[0].action["params"]
     for it in items[1:]:
         if it.action["params"] != p0:
-            raise ActionError("同じ group の item の params が一致しません")
+            raise ActionError("params differ between items of the same group")
     return p0
 
 
-# --- 隔離ストアへの移動 -------------------------------------------------------------------------
+# --- Moving into the quarantine store ------------------------------------------------------------
 def lock_payload(efd: int, kind: str, tree_kinds: dict | None) -> None:
     if kind == "file":
         fd = os.open("payload", os.O_RDONLY | fsutil.O_NOFOLLOW | fsutil.O_CLOEXEC | fsutil.O_NONBLOCK, dir_fd=efd)
@@ -139,7 +139,7 @@ def unlock_payload(efd: int, kind: str, mode: int, tree_modes: dict | None) -> N
 
 def move_in(rt: Runtime, res: Resolved, kind: str, expect_ident, digest: str, tree: fsutil.TreeInfo | None,
             meta: dict, undo_list: list, step_no: int) -> dict:
-    """res を隔離ストアへ rename で移し、mode を落とし、マニフェストを書く。undo_list に途中経過を積む。"""
+    """Moves res into the quarantine store with rename, drops its mode and writes the manifest. Records progress in undo_list."""
     entry = rt.new_entry()
     efd = entry.create()
     u = {"op": "move", "qid": entry.qid, "orig": res.path, "kind": kind, "stage": "entry",
@@ -150,13 +150,13 @@ def move_in(rt: Runtime, res: Resolved, kind: str, expect_ident, digest: str, tr
     try:
         cur = res.lstat()
         if ident_of(cur) != tuple(expect_ident):
-            raise ActionError("事前検証の後に対象が差し替えられました")
+            raise ActionError("the target was replaced after pre-validation")
         os.rename(res.name, "payload", src_dir_fd=res.parent_fd, dst_dir_fd=efd)
         u["stage"] = "moved"
         rt.note(step_no, {"entries": undo_list})
         pst = os.stat("payload", dir_fd=efd, follow_symlinks=False)
         if (pst.st_dev, pst.st_ino) != (cur.st_dev, cur.st_ino):
-            raise ActionError("移した後の実体が一致しません", applied=True)
+            raise ActionError("the moved object does not match", applied=True)
         lock_payload(efd, kind, tree.kinds if tree else None)
         u["stage"] = "locked"
         locked = fsutil.tree_hash(efd, "payload", pst.st_dev).hash if kind == "tree" else digest
@@ -176,24 +176,24 @@ def move_in(rt: Runtime, res: Resolved, kind: str, expect_ident, digest: str, tr
 
 
 def move_out(u: dict, verify_digest: bool = False) -> None:
-    """move_in の逆。元の場所が空いていることを確かめてから、mode を戻し rename で戻す。"""
+    """Reverse of move_in. Checks that the original location is free, then restores the mode and moves it back with rename."""
     if u["stage"] == "entry":
-        return  # まだ移していない
+        return  # Not moved yet
     efd = store.open_entry(u["qid"])
     try:
         res = fsutil.resolve(u["orig"], must_exist=False)
         try:
             if res.st is not None:
-                raise ActionError(f"元の場所に別のものがあるため戻せません: {u['orig']}")
+                raise ActionError(f"cannot restore: something else is at the original location: {u['orig']}")
             pst = os.stat("payload", dir_fd=efd, follow_symlinks=False)
             if [pst.st_dev, pst.st_ino] != list(u["ident"]):
-                raise ActionError("隔離ストアの中身が差し替えられています")
-            # rename の後なら mode を元に戻す（mode を落とす途中で失敗した場合も、元の mode をすべて書き直す）
+                raise ActionError("the content of the quarantine store was replaced")
+            # After the rename, restore the mode (even if dropping the mode failed halfway, all original modes are written again)
             unlock_payload(efd, u["kind"], u["mode"], u.get("tree_modes"))
             os.rename("payload", res.name, src_dir_fd=efd, dst_dir_fd=res.parent_fd)
             after = os.stat(res.name, dir_fd=res.parent_fd, follow_symlinks=False)
             if [after.st_dev, after.st_ino] != list(u["ident"]):
-                raise ActionError("戻した後の実体が一致しません", applied=True)
+                raise ActionError("the restored object does not match", applied=True)
         finally:
             res.close()
         if u["stage"] == "done":
@@ -205,10 +205,10 @@ def move_out(u: dict, verify_digest: bool = False) -> None:
         os.close(efd)
 
 
-# --- ファイルの差し替え（edit_json / edit_toml / remove_line） ---------------------------------
+# --- Replacing files (edit_json / edit_toml / remove_line) ---------------------------------------
 def replace_file(rt: Runtime, res: Resolved, expect_ident, before_sha: str, new_bytes: bytes, after_sha: str,
                  meta: dict, undo: dict, step_no: int) -> None:
-    """一時ファイルに書いて fsync → 元のファイルを隔離ストアにハードリンク（バックアップ）→ 同一性を照合して rename。"""
+    """Write a temporary file and fsync -> hard-link the original file into the quarantine store (backup) -> check identity and rename."""
     st0 = res.st
     tmp = f".ger-{rt.run_id}-{rt.seq + 1}.tmp"
     entry = rt.new_entry()
@@ -230,7 +230,7 @@ def replace_file(rt: Runtime, res: Resolved, expect_ident, before_sha: str, new_
     try:
         cur = res.lstat()
         if ident_of(cur) != tuple(expect_ident):
-            raise ActionError("事前検証の後に対象が差し替えられました")
+            raise ActionError("the target was replaced after pre-validation")
         os.link(res.name, "payload", src_dir_fd=res.parent_fd, dst_dir_fd=efd, follow_symlinks=False)
         undo["stage"] = "linked"
         rt.note(step_no, undo)
@@ -238,7 +238,7 @@ def replace_file(rt: Runtime, res: Resolved, expect_ident, before_sha: str, new_
         cur2 = res.lstat()
         if (pst.st_dev, pst.st_ino) != (cur.st_dev, cur.st_ino) or (cur2.st_dev, cur2.st_ino) != (cur.st_dev, cur.st_ino) \
                 or cur2.st_mtime_ns != cur.st_mtime_ns or cur2.st_size != cur.st_size:
-            raise ActionError("バックアップの作成中に対象が差し替えられました")
+            raise ActionError("the target was replaced while creating the backup")
         os.rename(tmp, res.name, src_dir_fd=res.parent_fd, dst_dir_fd=res.parent_fd)
         undo["stage"] = "replaced"
         rt.note(step_no, undo)
@@ -246,8 +246,8 @@ def replace_file(rt: Runtime, res: Resolved, expect_ident, before_sha: str, new_
         undo["new_ident"] = [nst.st_dev, nst.st_ino]
         got = fsutil.hash_file(res.parent_fd, res.name, nst)
         if got != after_sha:
-            raise ActionError("適用後のファイルの SHA-256 が expected_after_sha256 と一致しません（V）")
-        # バックアップ（元の i-node）の mode を落とす（元の mode はマニフェストに残す）
+            raise ActionError("the SHA-256 of the file after applying does not match expected_after_sha256 (V)")
+        # Drop the mode of the backup (the original i-node); the original mode is kept in the manifest
         bfd = os.open("payload", os.O_RDONLY | fsutil.O_NOFOLLOW | fsutil.O_CLOEXEC | fsutil.O_NONBLOCK, dir_fd=efd)
         try:
             os.fchmod(bfd, 0o400)
@@ -270,13 +270,13 @@ def rt_is_root() -> bool:
 
 
 def unreplace_file(u: dict) -> None:
-    """replace_file の逆。現在のファイルが GER の書いたもの（after_sha256）であることを確かめてから、
-    編集後のファイルを隔離ストアに残し（ハードリンク）、バックアップを rename で戻す。何も削除しない。"""
+    """Reverse of replace_file. Checks that the current file is what GER wrote (after_sha256), then
+    keeps the edited file in the quarantine store (hard link) and moves the backup back with rename. Deletes nothing."""
     stage = u.get("stage")
     res = fsutil.resolve(u["target"], must_exist=False)
     try:
         if stage in ("start", "tmp", "linked"):
-            # まだ置き換えていない。一時ファイル（GER が作ったもの）だけを片付ける
+            # Not replaced yet. Clean up only the temporary file (created by GER)
             try:
                 tst = os.stat(u["tmp"], dir_fd=res.parent_fd, follow_symlinks=False)
                 if stat.S_ISREG(tst.st_mode):
@@ -287,15 +287,15 @@ def unreplace_file(u: dict) -> None:
         efd = store.open_entry(u["qid"])
         try:
             if res.st is None:
-                raise ActionError(f"編集したファイルがありません: {u['target']}")
+                raise ActionError(f"the edited file is missing: {u['target']}")
             if "new_ident" in u and [res.st.st_dev, res.st.st_ino] != list(u["new_ident"]):
-                raise ActionError("編集後のファイルが差し替えられているため戻せません")
+                raise ActionError("cannot restore: the edited file was replaced")
             cur = fsutil.hash_file(res.parent_fd, res.name, res.st)
             if cur != u["after_sha256"]:
-                raise ActionError("編集後のファイルが GER の書いた内容から変わっているため戻せません")
+                raise ActionError("cannot restore: the edited file changed from the content GER wrote")
             pst = os.stat("payload", dir_fd=efd, follow_symlinks=False)
             if [pst.st_dev, pst.st_ino] != list(u["ident"]):
-                raise ActionError("隔離ストアのバックアップが差し替えられています")
+                raise ActionError("the backup in the quarantine store was replaced")
             unlock_payload(efd, "file", u["mode"], None)
             try:
                 os.link(res.name, "replaced", src_dir_fd=res.parent_fd, dst_dir_fd=efd, follow_symlinks=False)
@@ -304,9 +304,9 @@ def unreplace_file(u: dict) -> None:
             os.rename("payload", res.name, src_dir_fd=efd, dst_dir_fd=res.parent_fd)
             back = os.stat(res.name, dir_fd=res.parent_fd, follow_symlinks=False)
             if [back.st_dev, back.st_ino] != list(u["ident"]):
-                raise ActionError("戻した後の実体が一致しません", applied=True)
+                raise ActionError("the restored object does not match", applied=True)
             if fsutil.hash_file(res.parent_fd, res.name, back) != u["before_sha256"]:
-                raise ActionError("戻した後の内容が編集前と一致しません", applied=True)
+                raise ActionError("the restored content does not match the content before the edit", applied=True)
             if stage == "done":
                 try:
                     store.write_json_excl(efd, "rolled_back.json", {"quarantine_id": u["qid"]})
@@ -319,7 +319,7 @@ def unreplace_file(u: dict) -> None:
 
 
 def rollback_undo(undo: dict) -> None:
-    """ジャーナルの undo 記録だけから戻す（executor のロールバックと ger recover の共通部分）。"""
+    """Restores only from the undo records in the journal (shared by executor rollback and ger recover)."""
     if undo.get("op") == "edit":
         unreplace_file(undo)
     elif "entries" in undo:
@@ -327,13 +327,13 @@ def rollback_undo(undo: dict) -> None:
             move_out(u)
 
 
-def check_regular(st, what="対象"):
+def check_regular(st, what="the target"):
     if stat.S_ISLNK(st.st_mode):
-        raise ActionError(f"{what}がシンボリックリンクです")
+        raise ActionError(f"{what} is a symbolic link")
     if not stat.S_ISREG(st.st_mode):
-        raise ActionError(f"{what}が通常ファイルではありません")
+        raise ActionError(f"{what} is not a regular file")
     if st.st_nlink != 1:
-        raise ActionError(f"{what}にハードリンクがあります（st_nlink={st.st_nlink}。別名に内容が残るため拒否）")
+        raise ActionError(f"{what} has hard links (st_nlink={st.st_nlink}; rejected because the content would remain under another name)")
 
 
 __all__ = ["ActionError", "FsError", "Item", "Ctx", "Step", "Runtime", "PreviewResult"]

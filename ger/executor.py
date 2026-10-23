@@ -1,8 +1,8 @@
-"""dry-run と apply。1 件でも失敗したら残りを実行せず、適用済みを逆順に戻す。
+"""dry-run and apply. If one step fails, the rest is not executed and the applied steps are undone in reverse order.
 
-ステップ（トランザクション）は gates.check_gates が作る。同じ group の item は 1 つのステップで、結果は item ごとに出す。
-ファイルを変えるステップ（quarantine / 編集）は、実行の前に意図をジャーナル（隔離ストアの journal/<run_id>.jsonl）に
-fsync 付きで書く。途中でプロセスが落ちた場合は ger recover でジャーナルから巻き戻す。
+Steps (transactions) are built by gates.check_gates. The items of one group form one step; results are reported per item.
+Steps that change files (quarantine / edits) write their intent to the journal (journal/<run_id>.jsonl in the quarantine store)
+with fsync before running. If the process dies halfway, ger recover rolls back from the journal.
 """
 from __future__ import annotations
 
@@ -69,14 +69,14 @@ def _items_results(step, result, reason, applied_at=None, after_override=False, 
 
 def apply(plan: dict, steps, clock=now_utc, run_id: str | None = None, plan_hash: str | None = None,
           input_hash: str | None = None) -> tuple[list[dict], str | None]:
-    """戻り値: (results, outcome)。outcome は None（成功）/ rolled_back / rollback_failed。"""
+    """Returns (results, outcome). outcome is None (success) / rolled_back / rollback_failed."""
     journal = None
     if any(s.type in JOURNALED and not s.noop for s in steps):
         run_id = run_id or store.new_run_id(clock())
         journal = store.Journal(run_id, {"plan_id": plan["plan_id"], "plan_hash": plan_hash, "input_hash": input_hash,
                                          "steps": [s.audit() for s in steps]})
     rt = Runtime(run_id or "norun", journal, plan["plan_id"], plan_hash, clock)
-    results: list[list[dict]] = []  # ステップごとの結果
+    results: list[list[dict]] = []  # Results per step
     done: list[tuple[int, object]] = []
     failure = None
     outcome = ROLLED_BACK
@@ -88,19 +88,19 @@ def apply(plan: dict, steps, clock=now_utc, run_id: str | None = None, plan_hash
             rt.step_no = i
             try:
                 s.apply(rt)
-            except Exception as e:  # 失敗は全件ロールバックの契機
+            except Exception as e:  # Any failure triggers a rollback of everything
                 reason = f"{type(e).__name__}: {e}"
-                if getattr(e, "applied", False):  # 変更済みの可能性があり、同一実体と確認できないため戻せない
+                if getattr(e, "applied", False):  # May already be changed and the object cannot be confirmed as the same, so it cannot be undone
                     outcome = ROLLBACK_FAILED
-                    reason = f"applied_unverified: 変更が適用された可能性がありますが、検証もロールバックもできません（{reason}）"
-                elif s.undo and s.type in JOURNALED:  # 途中まで進んだ分（一時ファイル・一部のメンバー）を戻す
+                    reason = f"applied_unverified: the change may have been applied, but it can be neither verified nor rolled back ({reason})"
+                elif s.undo and s.type in JOURNALED:  # Undo what was done so far (temporary file, some members)
                     try:
                         s.rollback(rt)
                         if journal:
                             journal.write({"event": "step_rolled_back", "step": i})
                     except Exception as e2:
                         outcome = ROLLBACK_FAILED
-                        reason += f"; 途中まで進んだ変更を戻せません: {type(e2).__name__}: {e2}"
+                        reason += f"; cannot undo the partial change: {type(e2).__name__}: {e2}"
                 results.append(_items_results(s, "failed", reason, after_override=True))
                 failure = i
                 break
@@ -133,7 +133,7 @@ def apply(plan: dict, steps, clock=now_utc, run_id: str | None = None, plan_hash
                 for r in results[idx]:
                     r.update(reason=f"rollback_failed: {type(e).__name__}: {e}")
         if journal:
-            # rollback_failed はジャーナルを開いたままにする（ger recover の対象）
+            # rollback_failed keeps the journal open (target of ger recover)
             journal.write({"event": "rolled_back" if outcome == ROLLED_BACK else "rollback_failed"})
         return [r for rs in results for r in rs] + skipped_decisions(plan), outcome
     finally:

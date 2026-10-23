@@ -1,11 +1,11 @@
-"""JSON Schema（2020-12）のサブセット検証器。標準ライブラリのみ。
+"""Validator for a subset of JSON Schema (2020-12). Standard library only.
 
-ZET / GER が使うキーワードだけを実装する:
+Only the keywords that ZET / GER use are implemented:
   type, const, enum, pattern, minLength, maxLength, minimum, maximum, minItems, maxItems, uniqueItems,
-  required, properties, additionalProperties(false/スキーマ), items, $ref(#/$defs/...),
+  required, properties, additionalProperties(false/schema), items, $ref(#/$defs/...),
   if/then/else, not, anyOf, oneOf, allOf
-未対応のキーワードがスキーマに現れたら例外にする（黙って通さない）。
-テストでは公式実装 jsonschema と判定が一致することを確認している。
+An unsupported keyword in a schema raises an exception (it is never silently ignored).
+The tests confirm that the results agree with the reference implementation jsonschema.
 """
 from __future__ import annotations
 
@@ -31,19 +31,19 @@ _TYPES = {
 
 
 class SchemaError(Exception):
-    """スキーマ自体が不正、または未対応キーワードを含む。"""
+    """The schema itself is invalid or contains an unsupported keyword."""
 
 
-# 端末に解釈されうる文字: C0 制御文字・DEL・C1 制御文字（Cc）、行・段落区切り、双方向テキストの制御文字
+# Characters a terminal may interpret: C0 controls, DEL, C1 controls (Cc), line and paragraph separators, bidirectional text controls
 _UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]")
 
 
 def safe_text(s: Any) -> str:
-    """入力に由来する文字列を端末に安全に表示できる形にする（制御文字を \\xNN / \\uNNNN にする）。
+    """Make a string from the input printable on a terminal (control characters become \\xNN / \\uNNNN).
 
-    エラーメッセージにキー名・パスなどの入力値を含めるとき、ESC（OSC / CSI）や C1 制御文字で
-    端末のタイトル変更・画面消去などを起こさせないため。結果は制御文字を含まないので、何度適用しても
-    変わらない（検証器と CLI の両方で適用しても二重にエスケープしない）。バックスラッシュはそのまま残す。
+    When an error message contains input values such as keys or paths, ESC (OSC / CSI) or C1 controls must not
+    change the terminal title, clear the screen and so on. The result has no control characters, so applying it
+    again changes nothing (applying it in both the validator and the CLI does not escape twice). Backslashes are kept.
     """
     def esc(m: re.Match) -> str:
         c = ord(m.group())
@@ -59,10 +59,10 @@ _patterns: dict[str, re.Pattern] = {}
 
 
 def _compile(pattern: str) -> re.Pattern:
-    """ECMA 262 の意味で pattern をコンパイルする。
+    """Compile pattern with ECMA 262 semantics.
 
-    Python の `$` は末尾の改行の直前にも一致する（"alice\\n" が ^...$ を通る）ため、
-    文字クラス外のエスケープされていない `$` を `\\Z` に置き換える。
+    Python's `$` also matches just before a trailing newline ("alice\\n" passes ^...$), so an unescaped `$`
+    outside a character class is replaced with `\\Z`.
     """
     c = _patterns.get(pattern)
     if c is None:
@@ -77,7 +77,7 @@ def _compile(pattern: str) -> re.Pattern:
                 in_class = ch != "]"
             elif ch == "[":
                 in_class = True
-                if pattern[i + 1:i + 2] == "]":  # 先頭の ] はリテラル（Python 解釈に合わせる）
+                if pattern[i + 1:i + 2] == "]":  # a leading ] is a literal (as Python reads it)
                     out.append("[]")
                     i += 2
                     continue
@@ -90,7 +90,7 @@ def _compile(pattern: str) -> re.Pattern:
 
 
 def _eq(a: Any, b: Any) -> bool:
-    # JSON の等価性（bool と数値を区別する）
+    # JSON equality (bool and numbers are different)
     if isinstance(a, bool) or isinstance(b, bool):
         return type(a) is type(b) and a == b
     return a == b

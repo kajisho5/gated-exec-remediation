@@ -2,18 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/kajisho5/zero-exec-triage/schemas/remediation-plan.schema.json",
   "title": "ZET remediation-plan.json",
-  "description": "ZET（判断層）の出力契約。ZET が所有し、GER（修復層）は schema_version を固定して参照する。status: draft は未確定の下書きで GER は受理しない。未知フィールドは拒否（strict）。1.1 で action に relation / finding_path / group / evidence / followup、plan に scope を追加（修復操作の拡張）。1.0 の計画（chmod のみ）も引き続き有効。",
+  "description": "Output contract of ZET (decision layer). Owned by ZET; GER (remediation layer) refers to it with a pinned schema_version. status: draft is an unfinished draft that GER does not accept. Unknown fields are rejected (strict). 1.1 adds relation / finding_path / group / evidence / followup to action and scope to the plan (extended remediation operations). 1.0 plans (chmod only) remain valid.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "plan_id", "created_at", "status", "items", "held"],
   "properties": {
-    "schema_version": { "enum": ["1.0", "1.1"], "description": "ZET 0.2 以降は 1.1 を出力する。1.0 は後方互換（GER は chmod だけを実行する）" },
+    "schema_version": { "enum": ["1.0", "1.1"], "description": "ZET 0.2 and later write 1.1. 1.0 is for backward compatibility (GER runs chmod only)" },
     "scope": { "$ref": "#/$defs/scope" },
     "plan_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
     "created_at": { "$ref": "#/$defs/ts" },
     "status": { "enum": ["ok", "partial", "error", "draft"] },
-    "plan_hash": { "$ref": "#/$defs/sha256", "description": "plan_hash を除いた本体の正規化 JSON の SHA-256（A-6）。確定 plan のみ" },
-    "now_override": { "const": true, "description": "draft / finalize を --now（テスト専用の時刻上書き）で実行した plan。GER は GER_ALLOW_NOW_OVERRIDE=1 のときだけ受理する。省略は false と同じ" },
+    "plan_hash": { "$ref": "#/$defs/sha256", "description": "SHA-256 of the canonical JSON of the body without plan_hash (A-6). Finalized plans only" },
+    "now_override": { "const": true, "description": "A plan made by draft / finalize with --now (time override for tests only). GER accepts it only with GER_ALLOW_NOW_OVERRIDE=1. Omitting it means false" },
     "items": { "type": "array", "items": { "$ref": "#/$defs/item" } },
     "held": { "type": "array", "items": { "$ref": "#/$defs/held" } }
   },
@@ -41,14 +41,14 @@
         "exception_type": { "enum": ["not_affected", "fix_unavailable", "risk_accepted", null] },
         "reason": { "type": ["string", "null"] },
         "owner": { "type": ["string", "null"] },
-        "decided_by": { "anyOf": [{ "$ref": "#/$defs/person" }, { "type": "null" }], "description": "判断者（A-2）" },
+        "decided_by": { "anyOf": [{ "$ref": "#/$defs/person" }, { "type": "null" }], "description": "The decision maker (A-2)" },
         "decided_at": { "$ref": "#/$defs/ts_or_null" },
         "due_at": { "$ref": "#/$defs/ts_or_null" },
         "recheck_at": { "$ref": "#/$defs/ts_or_null" },
         "approved_by": { "type": "array", "items": { "$ref": "#/$defs/person" } },
-        "level_effective": { "$ref": "#/$defs/level", "description": "SkillPact 規則で引き上げた後の重大度（A-3）。入力の level は改変しない" },
+        "level_effective": { "$ref": "#/$defs/level", "description": "Severity after raising it by the SkillPact rules (A-3). The input level is never changed" },
         "action": { "anyOf": [{ "$ref": "#/$defs/action" }, { "type": "null" }] },
-        "skillpact": { "$ref": "#/$defs/skillpact", "description": "対象 finding の skillpact の要約。finalize で付与（GER が I-5 / I-6 / I-7 を plan だけで再検査する）" },
+        "skillpact": { "$ref": "#/$defs/skillpact", "description": "Summary of the finding's skillpact. Added by finalize (GER rechecks I-5 / I-6 / I-7 from the plan alone)" },
         "constraints": { "$ref": "#/$defs/constraints" }
       }
     },
@@ -66,23 +66,23 @@
       "required": ["type", "target", "params"],
       "properties": {
         "type": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
-        "target": { "type": ["string", "null"], "pattern": "^/", "description": "操作の対象。null は checklist（path が null の finding。crontab・環境変数など）のときだけ" },
-        "relation": { "enum": ["self", "npm_pkg_dir", "npm_installed", "pypi_record", "ext_dir", "skill_dir", "plist_program", "preload_lib", "unit_wants", "none"], "description": "target と finding の path の関係（閉じた集合）。ZET は字句上の条件を、GER は現在のファイルシステムで同じ関係を独立に確かめる。none は target が null のときだけ。plist_program / preload_lib / unit_wants は Phase 2（GER は未対応）" },
-        "finding_path": { "type": ["string", "null"], "pattern": "^/", "description": "対象 finding の path。finalize で写す" },
-        "group": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "同じ対象への複数の finding を 1 つのトランザクション（書き込み 1 回）にまとめる。type・target・evidence.hash が一致すること" },
-        "evidence": { "type": "object", "additionalProperties": false, "required": ["kind", "hash"], "description": "検知時の finding_path の状態。finalize で写す（findings 1.1 の evidence。1.0 では evidence_hash が detail のハッシュかどうかから導く）。detail は照合できないため GER は params に固定した preview のハッシュを使う", "properties": { "kind": { "enum": ["file", "large_file", "tree", "symlink", "detail"] }, "hash": { "$ref": "#/$defs/sha256" } } },
-        "followup": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/checklist" }, "description": "自動修復の後に必ず行う手作業（インシデント対応、秘密情報のローテーション、launchctl bootout など）。ZET が finding から必須のものを決め、欠けていれば I-13" },
-        "params": { "type": "object", "description": "操作ごとの形は actions.schema.json（GER 所有。schemas/vendor に版固定で写す）。draft では select（ger preview が具体的な値に置き換える）を許す" },
-        "reversible": { "type": "boolean", "description": "操作種別から ZET が決める（A-4）。finalize で付与" },
-        "skillpact_effects": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/effect" }, "description": "対象 finding の skillpact.declared_effects（A-4）。finalize で付与" },
-        "evidence_hash": { "$ref": "#/$defs/sha256", "description": "plan 1.0 の互換用（1.1 は evidence を使う）。対象 finding の evidence_hash（ZES の規則: 100MB 以下の通常ファイルは内容の SHA-256、100MB 超はパス・サイズ・mtime の SHA-256）。finalize で付与。GER は G-7 で現在のファイルと比べる" }
+        "target": { "type": ["string", "null"], "pattern": "^/", "description": "Target of the operation. null only for a checklist (a finding whose path is null: crontab, environment variables and so on)" },
+        "relation": { "enum": ["self", "npm_pkg_dir", "npm_installed", "pypi_record", "ext_dir", "skill_dir", "plist_program", "preload_lib", "unit_wants", "none"], "description": "Relation between target and the finding's path (closed set). ZET checks the lexical conditions; GER independently checks the same relation on the current file system. none only when target is null. plist_program / preload_lib / unit_wants are Phase 2 (not supported by GER yet)" },
+        "finding_path": { "type": ["string", "null"], "pattern": "^/", "description": "The finding's path. Copied by finalize" },
+        "group": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Combines several findings on the same target into one transaction (one write). type, target and evidence.hash must match" },
+        "evidence": { "type": "object", "additionalProperties": false, "required": ["kind", "hash"], "description": "State of finding_path at detection. Copied by finalize (the findings 1.1 evidence; with 1.0 derived from whether evidence_hash is the hash of detail). detail cannot be compared, so GER uses the preview hashes pinned in params", "properties": { "kind": { "enum": ["file", "large_file", "tree", "symlink", "detail"] }, "hash": { "$ref": "#/$defs/sha256" } } },
+        "followup": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/checklist" }, "description": "Manual work that must follow an automatic remediation (incident response, secret rotation, launchctl bootout and so on). ZET decides from the finding which ones are required; a missing one is I-13" },
+        "params": { "type": "object", "description": "The shape per operation is actions.schema.json (owned by GER, copied with a pinned version to schemas/vendor). Drafts allow select (ger preview replaces it with concrete values)" },
+        "reversible": { "type": "boolean", "description": "Determined by ZET from the operation type (A-4). Added by finalize" },
+        "skillpact_effects": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/effect" }, "description": "skillpact.declared_effects of the finding (A-4). Added by finalize" },
+        "evidence_hash": { "$ref": "#/$defs/sha256", "description": "For plan 1.0 compatibility (1.1 uses evidence). The finding's evidence_hash (ZES rule: SHA-256 of the contents for a regular file of 100 MB or less, SHA-256 of path, size and mtime above 100 MB). Added by finalize. GER compares it with the current file in G-7" }
       }
     },
     "scope": {
       "type": "object",
       "additionalProperties": false,
       "required": ["roots", "home"],
-      "description": "承認の対象に入る検査範囲（GER の G-9）。roots は ZES の検査ルート（findings 1.1 の scan_roots、または triage-input の policy.scope）、home は ZES_HOME。ファイルを変える action の target は roots か home の下にあること。隔離ストアは roots の下に置けない",
+      "description": "The scan scope covered by the approval (GER G-9). roots are the ZES scan roots (scan_roots of findings 1.1, or policy.scope of the triage input), home is ZES_HOME. The target of an action that changes files must be under roots or home. The quarantine store cannot be under roots",
       "properties": {
         "roots": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^/" } },
         "home": { "type": ["string", "null"], "pattern": "^/" }
@@ -97,13 +97,13 @@
         "steps": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "object", "additionalProperties": false, "required": ["id", "text", "blocking"], "properties": { "id": { "type": "string", "pattern": "^s[0-9]{1,3}$" }, "text": { "type": "string", "minLength": 1 }, "blocking": { "type": "boolean" } } } }
       }
     },
-    "effect": { "enum": ["read", "write", "network", "exec", "spend", "send"], "description": "SkillPact 0.8 の 6 効果（ZES findings.schema.json の $defs.effect と同じ）" },
+    "effect": { "enum": ["read", "write", "network", "exec", "spend", "send"], "description": "The 6 SkillPact 0.8 effects (the same as $defs.effect in the ZES findings.schema.json)" },
     "skillpact": {
       "type": "object",
       "additionalProperties": false,
       "required": ["signed", "divergence", "diff_anomaly", "declared_effects"],
       "properties": {
-        "signed": { "type": "boolean", "description": "署名フィールドがあるか（未検証）" },
+        "signed": { "type": "boolean", "description": "Whether there is a signature field (not verified)" },
         "divergence": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/effect" } },
         "diff_anomaly": { "type": "boolean" },
         "declared_effects": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/effect" } }
@@ -113,11 +113,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["allowed_decisions", "min_approvers"],
-      "description": "draft のみの注記。check は plan 側の値を信用せず入力から再計算する",
+      "description": "Notes for drafts only. check does not trust these values from the plan and recomputes them from the input",
       "properties": {
         "allowed_decisions": { "type": "array", "items": { "enum": ["remediate", "exception", "defer"] } },
         "min_approvers": { "type": "integer", "minimum": 0 },
-        "suggested_actions": { "type": "array", "description": "ZET の提案（finding → 修復の対応表）。label auto は GER が自動で直す操作、checklist は手作業だけ。採用するかは判断者が決める", "items": { "type": "object", "additionalProperties": false, "required": ["label", "action"], "properties": { "label": { "enum": ["auto", "checklist"] }, "note": { "type": "string" }, "action": { "$ref": "#/$defs/action" } } } }
+        "suggested_actions": { "type": "array", "description": "ZET's suggestions (finding → remediation mapping). label auto is an operation that GER performs automatically; checklist is manual work only. The decision maker decides whether to adopt one", "items": { "type": "object", "additionalProperties": false, "required": ["label", "action"], "properties": { "label": { "enum": ["auto", "checklist"] }, "note": { "type": "string" }, "action": { "$ref": "#/$defs/action" } } } }
       }
     },
     "held": {
@@ -126,7 +126,7 @@
       "required": ["finding_id", "reason"],
       "properties": {
         "finding_id": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
-        "module": { "type": "string", "pattern": "^(§([1-9]|[1-4][0-9])|core)$", "description": "モジュール単位の保留（A-5）" },
+        "module": { "type": "string", "pattern": "^(§([1-9]|[1-4][0-9])|core)$", "description": "Hold for a whole module (A-5)" },
         "reason": { "type": "string", "minLength": 1 }
       },
       "if": { "properties": { "finding_id": { "type": "null" } } },

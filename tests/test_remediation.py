@@ -1,5 +1,5 @@
-"""GER Phase 1 の修復操作のテスト（quarantine / restore / edit_json / edit_toml / remove_line / disable_mcp_server /
-checklist、group、定義 T、関係 G-9、ロールバック、ジャーナルと recover、改ざんと TOCTOU）。標準ライブラリの unittest のみ。"""
+"""Tests for GER's Phase 1 remediation operations (quarantine / restore / edit_json / edit_toml / remove_line / disable_mcp_server /
+checklist, group, definition T, relation G-9, rollback, journal and recover, tampering and TOCTOU). Standard library unittest only."""
 from __future__ import annotations
 
 import copy
@@ -61,7 +61,7 @@ class R(unittest.TestCase):
     def tearDown(self):
         os.environ.pop("GER_LOG_DIR", None)
         os.environ.pop("GER_QUARANTINE_DIR", None)
-        for dp, dns, fns in os.walk(self.d):  # ストアの 0500 / 0400 を戻して片付ける
+        for dp, dns, fns in os.walk(self.d):  # Restore the store's 0500 / 0400 modes to clean up
             for n in dns + fns:
                 try:
                     if not os.path.islink(os.path.join(dp, n)):
@@ -70,7 +70,7 @@ class R(unittest.TestCase):
                     pass
         self.tmp.cleanup()
 
-    # --- 計画の組み立て ---
+    # --- Building plans ---
     def item(self, action: dict, i=None, level="HIGH", approved_by=(), decision="remediate") -> dict:
         if i is None:
             self.n += 1
@@ -165,7 +165,7 @@ class R(unittest.TestCase):
         self.assertEqual(c, expect, e)
         return c, e
 
-    # --- フィクスチャ ---
+    # --- Fixtures ---
     def mcp(self, name=".mcp.json", body=None):
         p = self.root / name
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -188,15 +188,15 @@ class TestQuarantine(R):
         self.assertEqual((r["result"], r["before"]), ("applied", h))
         qid = r["quarantine_ids"][0]
         payload = Path(store.store_dir()) / qid / "payload"
-        self.assertEqual(stat.S_IMODE(os.lstat(payload).st_mode), 0o400)  # 実行ビットを落とす
+        self.assertEqual(stat.S_IMODE(os.lstat(payload).st_mode), 0o400)  # Execute bits dropped
         m = json.loads((payload.parent / "manifest.json").read_text())
         self.assertEqual((m["original_path"], m["mode"], m["hash"]), (str(f), 0o755, h))
         self.assertTrue((Path(store.store_dir()) / store.MARKER).exists())
-        # 2 回目は already_compliant（ストアに同じハッシュのエントリがある）
+        # Second run: already_compliant (the store has an entry with the same hash)
         c, e = self.ger("dry-run", self.inp(p, "dry-run"))
         self.assertEqual(c, 0, e)
         self.assertEqual(self.log("dry-run")["results"][0]["reason"], "already_compliant")
-        # 監査ログには内容を残さない（ハッシュと隔離 ID だけ）
+        # The audit log keeps no contents (only hashes and quarantine IDs)
         self.assertNotIn("evil()", audit.log_path().read_text())
 
     def test_tree_and_symlink_and_restore_round_trip(self):
@@ -218,18 +218,18 @@ class TestQuarantine(R):
         self.run_plan(p)
         self.assertFalse(t.exists())
         self.assertFalse(os.path.lexists(link))
-        self.assertTrue((self.root / ".claude" / "settings.json").exists())  # リンク先は辿らない
+        self.assertTrue((self.root / ".claude" / "settings.json").exists())  # The link target is not followed
         qid = self.log()["results"][0]["quarantine_ids"][0]
         pay = Path(store.store_dir()) / qid / "payload"
         self.assertEqual(stat.S_IMODE(os.lstat(pay).st_mode), 0o500)
         self.assertEqual(stat.S_IMODE(os.lstat(pay / "scripts" / "run.sh").st_mode), 0o400)
-        # restore: 承認者 1 名は拒否、2 名で元どおり（ツリーハッシュ・mode も一致）
+        # restore: rejected with 1 approver, back to the original with 2 (tree hash and modes match too)
         self.restore(approvers=("sec-a",), dry_expect=3)
         self.restore()
         self.assertEqual(tree(t), before)
         self.assertEqual(os.readlink(link), "../.claude/settings.json")
         self.assertTrue(all(e["status"] == "restored" for e in store.list_entries()))
-        # 同じエントリをもう一度戻すことはできない
+        # The same entry cannot be restored twice
         ents = store.list_entries()
         for e in ents:
             e["status"] = "quarantined"
@@ -241,31 +241,31 @@ class TestQuarantine(R):
         hl = self.root / "b.js"
         os.link(f, hl)
         p = self.preview(self.plan([self.item({"type": "quarantine", "target": str(f), "params": {}})]), expect=3)
-        self.assertIn("ハードリンク", (self.d / "pv-report.json").read_text())
+        self.assertIn("hard link", (self.d / "pv-report.json").read_text())
         os.unlink(hl)
         fifo = self.root / "fifo"
         os.mkfifo(fifo)
         pl = self.plan([self.item({"type": "quarantine", "target": str(fifo), "params": {"kind": "file", "sha256": "sha256:" + "0" * 64}})])
         self.rejected(pl, "G-7", "FIFO")
-        # 見かけだけの修復（dist-info だけ・node_modules の package.json だけ）は self では拒否（Q-6）
+        # Cosmetic remediation (only the dist-info, only the package.json in node_modules) is rejected for self (Q-6)
         di = self.root / "site-packages" / "evil-1.0.dist-info"
         di.mkdir(parents=True)
         (di / "METADATA").write_text("Name: evil")
         pl = self.plan([self.item({"type": "quarantine", "target": str(di), "params": {"kind": "tree", "tree_sha256": tree(di)}})])
         self.rejected(pl, "G-10", "Q-6")
-        # RECORD が無い dist-info は pypi_record でも拒否（コードが残る）
+        # A dist-info without RECORD is rejected even with pypi_record (the code would remain)
         pl = self.plan([self.item({"type": "quarantine", "target": str(di), "relation": "pypi_record",
                                    "params": {"kind": "tree", "tree_sha256": tree(di), "record": True}})])
-        self.rejected(pl, "G-7", "RECORD がありません")
-        # preview 後に内容が変わった
+        self.rejected(pl, "G-7", "RECORD is missing")
+        # The content changed after preview
         p = self.preview(self.plan([self.item({"type": "quarantine", "target": str(f), "params": {}})]))
         f.write_text("y")
         self.rejected(p, "G-7", "preview")
-        # 別のデバイス（隔離ストアと st_dev が違う）
+        # A different device (st_dev differs from the quarantine store)
         f.write_text("x")
         p = self.preview(self.plan([self.item({"type": "quarantine", "target": str(f), "params": {}})]))
         with mock.patch.object(store, "device", return_value=-1):
-            self.rejected(p, "G-7", "別のデバイス")
+            self.rejected(p, "G-7", "different device")
         self.assertTrue(f.exists())
 
     def test_npm_pkg_dir_and_pypi_record_and_ext_dir(self):
@@ -302,12 +302,12 @@ class TestQuarantine(R):
         self.assertEqual(p["items"][0]["action"]["params"]["subject"], {"name": "keyv", "version": "6.0.0"})
         rep = (self.d / "pv-report.json").read_text()
         self.assertIn("move 2 files", rep)
-        self.assertIn("bin/litellm", rep)  # site-packages の外は移さず一覧で示す
-        # 偽の package.json（name が違う）は拒否
+        self.assertIn("bin/litellm", rep)  # Files outside site-packages are not moved but listed
+        # A fake package.json (different name) is rejected
         bad = copy.deepcopy(p)
         bad["items"][0]["action"]["params"]["subject"]["name"] = "other"
         self.rejected(self.rehash(bad), "G-7", "name")
-        # 関係の字句上の条件（ext_dir で Extensions の外を指す）
+        # Lexical conditions of the relation (ext_dir pointing outside Extensions)
         bad = copy.deepcopy(p)
         bad["items"][2]["action"]["target"] = str(self.root / "Extensions")
         self.rejected(self.rehash(bad), "G-9", "ext_dir")
@@ -325,13 +325,13 @@ class TestQuarantine(R):
         (di / "RECORD").write_text("x.py,sha256=AAAA,1\n")
         p = self.preview(self.plan([self.item({"type": "quarantine", "target": str(di), "relation": "pypi_record", "params": {}})]),
                          expect=3)
-        self.assertIn("ハッシュが一致しません", (self.d / "pv-report.json").read_text())
+        self.assertIn("hash does not match", (self.d / "pv-report.json").read_text())
         self.assertTrue(di.exists())
         del p
 
 
 class TestTreeHashVector(R):
-    """ger-tree-v1 のテストベクタ（ZES の bash 実装が同じ値を出すことを確かめるための固定値。設計書 §11.3）。"""
+    """Test vectors for ger-tree-v1 (fixed values to check that ZES's bash implementation gives the same result; design doc §11.3)."""
 
     def test_vector(self):
         t = self.root / "t"
@@ -350,9 +350,9 @@ class TestTreeHashVector(R):
                 + b"f\0b/c\0" + b"0600\0" + b"0\0" + h(b"").encode() + b"\n"
                 + b"l\0l\0" + oct(os.lstat(t / "l").st_mode & 0o7777)[2:].zfill(4).encode() + b"\0a\n")
         self.assertEqual(tree(t), "sha256:" + h(want))
-        if os.lstat(t / "l").st_mode & 0o7777 == 0o777:  # Linux のシンボリックリンクは 0777
+        if os.lstat(t / "l").st_mode & 0o7777 == 0o777:  # Symbolic links on Linux are 0777
             self.assertEqual(tree(t), "sha256:a0330bed2509e447a89682699b271f59ea236c52316ec21f0e546620de17958e")
-        os.mkfifo(t / "b" / "x")  # FIFO を含むツリーはハッシュを出さず拒否
+        os.mkfifo(t / "b" / "x")  # A tree containing a FIFO gets no hash and is rejected
         r = fsutil.resolve(str(t))
         try:
             with self.assertRaises(fsutil.FsError):
@@ -391,7 +391,7 @@ class TestEdits(R):
         self.assertEqual({x: fhash(x) for x in before}, before)
 
     def test_mcp_danger_matches_zes(self):
-        # ZES §17 の MCP_DANGER_RE（round 3 の回避形を含む）と同じものを危険とし、それ以外は選ばない
+        # The same things as MCP_DANGER_RE in ZES §17 (including the round 3 evasions) count as dangerous; nothing else is selected
         from ger import hazards
         bad = [("cmd.exe", ["/c", "echo x"]), ("deno", ["eval", "Deno.exit()"]), ("node", ["--eval", "1"]),
                ("/bin/bash", ["--norc", "-c", "touch x"]), ("perl", ["-e", "1"]), ("pwsh", ["-NoProfile", "-Command", "x"]),
@@ -419,7 +419,7 @@ class TestEdits(R):
                      '"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "node .claude/setup.mjs"}]}]}}')
         p = self.preview(self.plan([self.item({"type": "edit_json", "target": str(s), "params": {"select": "claude.hook"}})]))
         ok = copy.deepcopy(p)
-        # 改ざん（plan_hash も計算し直したもの）: deny を取り除く・K に無い値を書く・ハッシュの差し替え
+        # Tampering (with plan_hash recomputed too): removing deny, writing a value not in K, swapping hashes
         deny = copy.deepcopy(p)
         a = deny["items"][0]["action"]["params"]
         a["ops"] = [{"op": "remove", "pointer": "/permissions/deny",
@@ -433,17 +433,17 @@ class TestEdits(R):
         after = copy.deepcopy(p)
         after["items"][0]["action"]["params"]["expected_after_sha256"] = "sha256:" + "1" * 64
         self.rejected(self.rehash(after), "G-7", "expected_after_sha256")
-        # disable_mcp_server（preset）は MCP サーバー以外を取り除けない
+        # disable_mcp_server (preset) cannot remove anything other than MCP servers
         pkg = self.root / "package.json"
         pkg.write_text('{"scripts": {"preinstall": "x"}}')
         q = self.preview(self.plan([self.item({"type": "edit_json", "target": str(pkg), "params": {"select": "npm.lifecycle"}})]))
         q["items"][0]["action"]["type"] = "disable_mcp_server"
         self.rejected(self.rehash(q), "G-10", "T-1")
-        # キーの重複は拒否
+        # Duplicate keys are rejected
         d = self.root / ".mcp.json"
         d.write_text('{"mcpServers": {"a": {"command": "curl x"}, "a": {"command": "y"}}}')
         self.preview(self.plan([self.item({"type": "disable_mcp_server", "target": str(d), "params": {"select": "mcp.server"}})]), expect=3)
-        self.assertIn("重複", (self.d / "pv-report.json").read_text())
+        self.assertIn("duplicate", (self.d / "pv-report.json").read_text())
         self.run_plan(ok)
         self.assertEqual(json.loads(s.read_text())["permissions"], {"deny": ["Bash(curl:*)"]})
 
@@ -458,11 +458,11 @@ class TestEdits(R):
         p = self.preview(self.plan([self.item({"type": "disable_mcp_server", "target": str(good), "params": {"select": "mcp.server"}})]))
         self.assertEqual(p["items"][0]["action"]["params"]["ops"][0]["key_path"], ["mcp_servers", "spaced"])
         self.preview(self.plan([self.item({"type": "edit_toml", "target": str(dotted), "params": {"select": "mcp.server"}})]), expect=3)
-        self.assertIn("標準のテーブルヘッダ", (self.d / "pv-report.json").read_text())
+        self.assertIn("standard table header", (self.d / "pv-report.json").read_text())
         self.run_plan(p)
         import tomllib
         self.assertEqual(tomllib.loads(good.read_text()), {"model": "o3", "mcp_servers": {"ok": {"command": "/bin/inert"}}})
-        # H に無いテーブル（mcp_servers 以外）は取り除けない
+        # Tables not in H (anything other than mcp_servers) cannot be removed
         good.write_text('[profile.x]\ncommand = "curl x"\n')
         bad = copy.deepcopy(p)
         bad["items"][0]["action"]["type"] = "edit_toml"
@@ -478,26 +478,26 @@ class TestEdits(R):
         self.assertEqual([ln["n"] for ln in p["items"][0]["action"]["params"]["lines"]], [1])
         self.run_plan(p)
         self.assertEqual(rc.read_bytes(), b"\xef\xbb\xbf# ok\r\nexport PATH=/usr/bin\r\n")
-        # ブロック・ヒアドキュメント・継続行の中の行は拒否
+        # Lines inside a block, a here-document or a continued line are rejected
         for body in (b"if true; then\n  export LD_PRELOAD=/tmp/x.so\nfi\n",
                      b"cat <<EOF\nexport LD_PRELOAD=/tmp/x.so\nEOF\n",
                      b"echo a \\\nexport LD_PRELOAD=/tmp/x.so\n",
                      b"f() {\nexport LD_PRELOAD=/tmp/x.so\n}\n"):
             rc.write_bytes(body)
             self.preview(self.plan([self.item({"type": "remove_line", "target": str(rc), "params": {}})]), expect=3)
-        # pattern に一致しない行（PATH）を H の id で取り除こうとする改ざん
+        # Tampering that tries to remove a line not matching the pattern (PATH) with an H id
         rc.write_bytes(b"export PATH=/evil\nexport LD_PRELOAD=/tmp/x.so\n")
         p = self.preview(self.plan([self.item({"type": "remove_line", "target": str(rc), "params": {}})]))
         bad = copy.deepcopy(p)
         bad["items"][0]["action"]["params"]["lines"] = [{"n": 1, "sha256": sha256(b"export PATH=/evil"), "pattern_id": "sh.ld_preload"}]
         self.rejected(self.rehash(bad), "G-10", "T-1")
-        rc.write_bytes(b"export PATH=/evil\nexport LD_PRELOAD=/tmp/y.so\n")  # 行のハッシュの不一致
+        rc.write_bytes(b"export PATH=/evil\nexport LD_PRELOAD=/tmp/y.so\n")  # Line hash mismatch
         self.rejected(p, "G-7")
         php = self.root / "php.ini"
         php.write_text("[PHP]\nauto_prepend_file = /var/www/.x.php\ndisable_functions =\n")
         p = self.preview(self.plan([self.item({"type": "remove_line", "target": str(php), "params": {}})]))
         self.run_plan(p)
-        self.assertEqual(php.read_text(), "[PHP]\ndisable_functions =\n")  # disable_functions（H に無い）は残る
+        self.assertEqual(php.read_text(), "[PHP]\ndisable_functions =\n")  # disable_functions (not in H) stays
 
 
 class TestGroupsAndGates(R):
@@ -510,21 +510,21 @@ class TestGroupsAndGates(R):
         self.run_plan(p)
         res = self.log()["results"]
         self.assertEqual([r["reason"] for r in res], ["group:g-pkg", "group:g-pkg"])
-        self.assertEqual(len({tuple(r["quarantine_ids"]) for r in res}), 1)  # バックアップは 1 つ（書き込み 1 回）
+        self.assertEqual(len({tuple(r["quarantine_ids"]) for r in res}), 1)  # One backup (one write)
         self.assertEqual(json.loads(pkg.read_text()), {"scripts": {}})
-        # group が無い同じ対象への 2 件は拒否。group の type / target が違えば拒否
+        # Two operations on the same target without a group are rejected. A group with different type / target is rejected
         pkg.write_text('{"scripts": {"preinstall": "node setup.mjs"}}')
         p = self.preview(self.plan([self.item(dict(a))]))
         a2 = copy.deepcopy(p["items"][0]["action"])
         pl = self.plan([self.item({k: v for k, v in a2.items() if k != "group"}), self.item({k: v for k, v in a2.items() if k != "group"})])
-        self.rejected(pl, "G-7", "重複")
+        self.rejected(pl, "G-7", "more than one operation")
         other = self.root / "other.js"
         other.write_text("x")
         pl = self.plan([self.item(a2), self.item({"type": "quarantine", "target": str(other), "group": "g-pkg",
                                                   "params": {"kind": "file", "sha256": fhash(other)}})])
         self.rejected(pl, "G-7", "group")
 
-    # --- findings 1.1: 1 つの対象に、finding_path も evidence の種類も違う finding がまとまる group ---
+    # --- findings 1.1: a group that combines findings with different finding_path values and evidence kinds on one target ---
     def _skill_group(self):
         sk = self.root / "skills" / "signed"
         sk.mkdir(parents=True)
@@ -557,26 +557,26 @@ class TestGroupsAndGates(R):
         self.run_plan(self.rehash(p))
         self.assertEqual([r["result"] for r in self.log()["results"]], ["applied"] * 4)
         self.assertFalse(sk.exists() or nm.exists())
-        self.assertTrue(lock.exists())  # ロックファイルは隔離しない（ZET が checklist として残す）
+        self.assertTrue(lock.exists())  # The lockfile is not quarantined (ZET keeps it as a checklist)
         self.restore()
         self.assertTrue((sk / "run.sh").exists() and (nm / "index.js").exists())
 
     def test_tampered_group_member_still_fails(self):
-        # 各 item の evidence は、それぞれの finding_path に対して導き直して照合する（group の他の item で代えない）
+        # The evidence of each item is derived again and compared against its own finding_path (not replaced by another item of the group)
         sk, con, p = self._skill_group()
-        con.write_text('{"name": "signed", "x": 1}')  # skill.contract.json が変わる（ツリーの pin でも止まる）
+        con.write_text('{"name": "signed", "x": 1}')  # skill.contract.json changes (the tree pin stops it too)
         self.rejected(p, "G-7")
         con.write_text('{"name": "signed"}')
-        (sk / "run.sh").write_text("curl y")  # ツリーの中身が変わる
+        (sk / "run.sh").write_text("curl y")  # The tree content changes
         self.rejected(p, "G-7")
         (sk / "run.sh").write_text("curl x")
         bad = copy.deepcopy(p)
-        bad["items"][0]["action"]["evidence"]["hash"] = "sha256:" + "0" * 64  # 計画の evidence を書き換える
-        self.rejected(self.rehash(bad), "G-7", "検知時")
+        bad["items"][0]["action"]["evidence"]["hash"] = "sha256:" + "0" * 64  # Rewrite the plan's evidence
+        self.rejected(self.rehash(bad), "G-7", "since detection")
         nm, lock, p2 = self._npm_group()
-        lock.write_text('{"packages": {}}')  # 2 件目（ロックファイル）だけが変わる
-        self.rejected(p2, "G-7", "検知時")
-        # 同じ finding_path の item どうしは evidence.hash が一致すること（従来どおり）
+        lock.write_text('{"packages": {}}')  # Only the second item (the lockfile) changes
+        self.rejected(p2, "G-7", "since detection")
+        # Items with the same finding_path must have the same evidence.hash (as before)
         lock.write_text('{"packages": {"node_modules/keyv": {"version": "6.0.0"}}}')
         bad = copy.deepcopy(p2)
         twin = copy.deepcopy(bad["items"][1])
@@ -584,7 +584,7 @@ class TestGroupsAndGates(R):
         twin["action"]["evidence"]["hash"] = "sha256:" + "1" * 64
         bad["items"].append(twin)
         self.rejected(self.rehash(bad), "G-7", "evidence.hash")
-        # group の 2 件目以降の relation も GER が確かめる（ロックファイルでない finding_path を npm_installed にしない）
+        # GER also checks the relation of the second and later items of a group (a finding_path that is not a lockfile cannot be npm_installed)
         bad = copy.deepcopy(p2)
         other = self.root / "notes.txt"
         other.write_text("x")
@@ -595,28 +595,28 @@ class TestGroupsAndGates(R):
         out = self.d / "outside.js"
         out.write_text("x")
         pl = self.plan([self.item({"type": "quarantine", "target": str(out), "params": {"kind": "file", "sha256": fhash(out)}})])
-        self.rejected(pl, "G-9", "検査範囲")
+        self.rejected(pl, "G-9", "scan scope")
         f = self.root / "a.js"
         f.write_text("x")
         pl = self.plan([self.item({"type": "quarantine", "target": str(f), "params": {"kind": "file", "sha256": fhash(f)}})], scope=False)
         self.rejected(pl, "G-9", "scope")
-        # 隔離ストアが検査ルートの下にあれば拒否
+        # Rejected if the quarantine store is under a scan root
         os.environ["GER_QUARANTINE_DIR"] = str(self.root / "store")
         self.rejected(self.plan([self.item({"type": "quarantine", "target": str(f), "params": {"kind": "file", "sha256": fhash(f)}})]),
-                      "G-9", "隔離ストア")
+                      "G-9", "quarantine store")
         os.environ["GER_QUARANTINE_DIR"] = str(self.d / "store")
-        # root が必要な対象（/etc）は承認者 2 名。/etc の許可リスト外は保護対象
+        # A target that requires root (/etc) needs 2 approvers. Outside the /etc allowlist it is protected
         it = self.item({"type": "remove_line", "target": "/etc/ld.so.preload",
                         "params": {"lines": [{"n": 1, "sha256": "sha256:" + "0" * 64, "pattern_id": "ldso.entry"}],
                                    "file_sha256": "sha256:" + "0" * 64, "expected_after_sha256": "sha256:" + "1" * 64}})
         pl = self.plan([it])
         pl["scope"]["roots"].append("/etc")
-        self.rejected(self.rehash(pl), "G-1", "承認者 2 名")
+        self.rejected(self.rehash(pl), "G-1", "2 or more approvers")
         it["approved_by"] = ["sec-a", "sec-b"]
-        self.rejected(self.rehash(pl), "G-6", "承認者 2 名")
+        self.rejected(self.rehash(pl), "G-6", "2 or more approvers")
         it["action"]["target"] = it["action"]["finding_path"] = "/etc/passwd"
         self.rejected(self.rehash(pl), "G-9", "/etc", approvers=("sec-a", "sec-b"))
-        # GER のインストール先・標準ライブラリは対象にできない
+        # The GER installation directory and the standard library cannot be targets
         from ger.core import ROOT
         pl = self.plan([self.item({"type": "quarantine", "target": str(ROOT / "ger" / "cli.py"),
                                    "params": {"kind": "file", "sha256": "sha256:" + "0" * 64}})])
@@ -627,7 +627,7 @@ class TestGroupsAndGates(R):
         f = self.root / "a.js"
         f.write_text("x")
         it = self.item({"type": "quarantine", "target": str(f), "params": {"kind": "file", "sha256": fhash(f)},
-                        "followup": [{"template": "CL-IR", "steps": [{"id": "s1", "text": "隔離した時刻を記録する", "blocking": True}]}]})
+                        "followup": [{"template": "CL-IR", "steps": [{"id": "s1", "text": "Record the time of the quarantine", "blocking": True}]}]})
         pl = self.plan([it])
         pl10 = copy.deepcopy(pl)
         pl10["schema_version"] = "1.0"
@@ -642,28 +642,28 @@ class TestChecklistConfirm(R):
     def test_checklist_pending_manual_and_confirm(self):
         target = self.root / "package-lock.json"
         target.write_text("{}")
-        cl = {"template": "CL-PKG", "steps": [{"id": "s1", "text": "npm ci を実行しない", "blocking": True},
-                                              {"id": "s2", "text": "ロックファイルを再生成する", "blocking": True}],
+        cl = {"template": "CL-PKG", "steps": [{"id": "s1", "text": "Do not run npm ci", "blocking": True},
+                                              {"id": "s2", "text": "Regenerate the lockfile", "blocking": True}],
               "verify": {"kind": "path_absent"}}
         p = self.plan([self.item({"type": "checklist", "target": str(target), "params": cl}),
                        self.item({"type": "checklist", "target": None, "params": {"template": "CL-CRON", "steps": [
-                           {"id": "s1", "text": "crontab -e で消す", "blocking": True}]}})])
+                           {"id": "s1", "text": "Remove it with crontab -e", "blocking": True}]}})])
         inp = self.inp(p, "apply")
         c, e = self.cli("confirm", self.write(inp, "c.json"), "--operator", "ops", "--item", fid(1), "--step", "CL-PKG:s1", "--now", NOW)
-        self.assertEqual(c, 3, e)  # apply の前は記録できない
+        self.assertEqual(c, 3, e)  # Nothing can be recorded before apply
         self.run_plan(p)
         self.assertEqual({r["result"] for r in self.log()["results"]}, {"pending_manual"})
-        self.assertTrue(target.exists())  # checklist はファイルを変えない
+        self.assertTrue(target.exists())  # checklist does not change files
         c, e = self.cli("confirm", self.write(inp, "c.json"), "--operator", "ops", "--item", fid(2), "--step", "CL-CRON:s1", "--now", NOW)
         self.assertEqual(c, 0, e)
         self.assertIn("self_attested", e)
         c, e = self.cli("confirm", self.write(inp, "c.json"), "--operator", "ops", "--item", fid(2), "--step", "CL-CRON:s1", "--now", NOW)
-        self.assertEqual(c, 3, e)  # 二重の確認は拒否
+        self.assertEqual(c, 3, e)  # A second confirmation is rejected
         c, e = self.cli("confirm", self.write(inp, "c.json"), "--operator", "sec-a", "--item", fid(1), "--step", "CL-PKG:s1", "--now", NOW)
         self.assertEqual(c, 3, e)
         self.assertIn("G-4", e)
         c, e = self.cli("confirm", self.write(inp, "c.json"), "--operator", "ops", "--item", fid(1), "--step", "CL-PKG:s1", "--now", NOW)
-        self.assertEqual(c, 3, e)  # verify path_absent: まだある
+        self.assertEqual(c, 3, e)  # verify path_absent: still there
         target.unlink()
         c, e = self.cli("confirm", self.write(inp, "c.json"), "--operator", "ops", "--item", fid(1), "--step", "CL-PKG:s1", "--now", NOW)
         self.assertEqual(c, 0, e)
@@ -711,7 +711,7 @@ class TestRollbackRecoverTamper(R):
         self.assertEqual({res[fid(i)]["result"] for i in range(1, 5)}, {"rolled_back"})
         j = list((Path(store.store_dir()) / "journal").iterdir())
         self.assertEqual(json.loads(j[0].read_text().splitlines()[-1])["event"], "rolled_back")
-        # 途中（ツリーの rename の後）で失敗しても戻る
+        # Restored even if it fails halfway (after the rename of the tree)
         self.assertEqual(self.ger("dry-run", self.inp(p, "dry-run"))[0], 0)
         real = base.lock_payload
         with mock.patch.object(base, "lock_payload", side_effect=lambda efd, kind, k: real(efd, kind, k) if kind == "file"
@@ -728,17 +728,17 @@ class TestRollbackRecoverTamper(R):
             c, e = self.ger("apply", self.inp(p, "apply"))
         self.assertEqual(c, 5, e)
         self.assertNotEqual(self.state(paths), snap)
-        self.assertEqual(len(store.open_journals()), 1)  # ジャーナルが残る
+        self.assertEqual(len(store.open_journals()), 1)  # The journal remains
         c, e = self.ger("recover", self.inp(p, "apply"))
         self.assertEqual(c, 0, e)
         self.assertEqual(self.state(paths), snap)
         self.assertEqual(store.open_journals(), [])
-        c, e = self.ger("recover", self.inp(p, "apply"))  # 2 回目は何もしない
+        c, e = self.ger("recover", self.inp(p, "apply"))  # The second run does nothing
         self.assertEqual(c, 0, e)
-        self.assertIn("未完了のジャーナルはありません", e)
+        self.assertIn("no unfinished journal", e)
 
     def test_crash_mid_apply_then_recover(self):
-        # プロセスが途中で落ちた（例外でもロールバックでもなく止まった）状態を、ジャーナルから巻き戻す
+        # Rolls back from the journal a process that stopped halfway (neither an exception nor a rollback)
         p, paths, snap = self.mixed()
         self.assertEqual(self.ger("dry-run", self.inp(p, "dry-run"))[0], 0)
 
@@ -749,7 +749,7 @@ class TestRollbackRecoverTamper(R):
                 self.ger("apply", self.inp(p, "apply"))
         self.assertNotEqual(self.state(paths), snap)
         c, e = self.ger("recover", self.inp(p, "apply"), operator="sec-a")
-        self.assertEqual(c, 3, e)  # 承認者は recover を実行できない（G-4）
+        self.assertEqual(c, 3, e)  # An approver cannot run recover (G-4)
         c, e = self.ger("recover", self.inp(p, "apply"))
         self.assertEqual(c, 0, e)
         self.assertEqual(self.state(paths), snap)
@@ -760,7 +760,7 @@ class TestRollbackRecoverTamper(R):
         self.assertEqual(self.ger("dry-run", self.inp(p, "dry-run"))[0], 0)
         real = store.Entry.create
 
-        def swap(entry):  # 事前検証の後・rename の直前に対象を差し替える
+        def swap(entry):  # Replace the target after pre-validation, right before the rename
             if f.exists():
                 os.rename(f, self.d / "orig.js")
                 f.write_text("evil2")
@@ -768,16 +768,16 @@ class TestRollbackRecoverTamper(R):
         with mock.patch.object(store.Entry, "create", swap):
             c, e = self.ger("apply", self.inp(p, "apply"))
         self.assertEqual(c, 4, e)
-        self.assertIn("差し替え", json.dumps(self.log(), ensure_ascii=False))
-        self.assertEqual(f.read_text(), "evil2")  # 差し替えられたものは動かさない
-        # 途中の要素をシンボリックリンクに差し替えた計画は G-7
+        self.assertIn("replaced", json.dumps(self.log(), ensure_ascii=False))
+        self.assertEqual(f.read_text(), "evil2")  # The replacement is not moved
+        # A plan whose intermediate element was replaced with a symbolic link is G-7
         sub = self.root / "sub"
         sub.mkdir()
         (sub / "x.js").write_text("x")
         q = self.preview(self.plan([self.item({"type": "quarantine", "target": str(sub / "x.js"), "params": {}})]))
         os.rename(sub, self.root / "real")
         sub.symlink_to(self.root / "real")
-        self.rejected(q, "G-7", "シンボリックリンク")
+        self.rejected(q, "G-7", "symbolic link")
 
     def test_tampered_store_blocks_restore(self):
         f = self.root / "a.js"

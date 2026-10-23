@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### English-first
+
+GER is now English-first, following ZES 0.5.0. Every message a person reads is English: gate rejection reasons, action errors, `ger preview` summaries and reports, CLI output and help, remediation-log `reason` texts and the test harness output. Behaviour does not change apart from the language of these strings.
+
+- **Unchanged**: gate and rule codes (G-1 to G-10, I-*, T-*, Q-*, CL-*), exit codes, JSON keys, enum values, schemas (only GER-owned schema `description` texts are English), `plan_hash` / `input_hash` / approval tokens, the audit log, journal and quarantine manifest formats, and `HAZARD_VERSION` (`ger-hazards-2`).
+- Messages that start with or contain a `T-` code are still reported as G-10; the check now looks for the half-width `(T-` because the full-width parenthesis is gone.
+- Audit log records written by earlier versions may hold a Japanese `error` text (an `-o` clash). Nothing reads that text back, and `ger verify-log` checks the hash chain over the raw bytes, so old logs still verify and old dry-run records still count.
+- Plans finalized by the current ZET are accepted as before. GER does not compare checklist step texts, followup templates or notes written by ZET; they only enter `plan_hash`, which GER recomputes over the plan as given. The vendored ZET files (`schemas/vendor/remediation-plan.schema.json`, `ger/jsonschema_lite.py`) are re-vendored from ZET's English-first versions (only comments, docstrings and schema descriptions changed; `schemas/vendor/VENDOR.json` pins the new commits and hashes). The ZET plan fixtures (`tests/fixtures/zet-final-plan*.json`) stay as ZET produced them, Japanese step texts included, and still validate.
+- Docs: README (already bilingual), SECURITY, brand README and `docs/design/design.md` are English, with Japanese as `*.ja.md` (`docs/design/flow.ja.svg` for the diagram). SKILL.md is English and tells agents to answer in the user's language. Code comments are English.
+- This changelog is bilingual from this entry; earlier entries stay in Japanese.
+
+### 日本語
+
+ZES 0.5.0 に合わせて GER を英語優先にしました。人が読む文（ゲートの拒否理由、操作のエラー、`ger preview` の要約とレポート、CLI の出力とヘルプ、remediation-log の `reason`、テストの出力）はすべて英語です。動作は、これらの文の言語以外は変わりません。
+
+- **変わらないもの**: ゲート・規則のコード（G-1〜G-10、I-*、T-*、Q-*、CL-*）、終了コード、JSON のキー、enum の値、スキーマ（英語にしたのは GER 所有のスキーマの `description` だけ）、`plan_hash` / `input_hash` / 承認トークン、監査ログ・ジャーナル・隔離マニフェストの形式、`HAZARD_VERSION`（`ger-hazards-2`）
+- `T-` のコードを含むメッセージは引き続き G-10 として報告します（全角の括弧が無くなったため、判定は半角の `(T-` で行います）
+- 以前の版が書いた監査ログの記録には日本語の `error`（`-o` の衝突）が入っていることがあります。この文を読み返す処理は無く、`ger verify-log` は生のバイト列でハッシュチェーンを確かめるため、古いログもそのまま検証に通り、古い dry-run 記録もそのまま数えます
+- 現在の ZET が確定した計画はこれまでどおり受け付けます。GER は ZET が書いたチェックリストの手順・followup のテンプレート・注記の文言を比べません（`plan_hash` に入るだけで、GER は渡された計画のまま計算し直します）。ZET から写したファイル（`schemas/vendor/remediation-plan.schema.json`、`ger/jsonschema_lite.py`）は、英語優先にした ZET の版から写し直しました（変わったのはコメント・docstring・スキーマの説明だけ。`schemas/vendor/VENDOR.json` に新しいコミットとハッシュを固定）。ZET の計画のフィクスチャ（`tests/fixtures/zet-final-plan*.json`）は ZET が出力したまま（日本語の手順を含む）で、引き続き検証に通ります
+- 文書: README（もともと英語と日本語）、SECURITY、brand の README、`docs/design/design.md` は英語を正とし、日本語版を `*.ja.md` に置きました（図は `docs/design/flow.ja.svg`）。SKILL.md は英語です（利用者の言語で答えるよう指示）。コードのコメントは英語にしました
+- この CHANGELOG はこの項目から英語と日本語の両方で書きます。以前の項目は日本語のままです
+
 ### MCP の危険判定を ZES §17 に揃える（定義 T の表 `ger-hazards-2`）
 
 - **原因**: `disable_mcp_server` / `edit_json` / `edit_toml` の自動選択（`select: mcp.server`）が使う危険なコマンドの正規表現が ZES round 3 より前のもので、ZES が HIGH とする回避形（`cmd /c`、`deno eval`、`node --eval`、`bash --norc -c`、`bash -xc`、`perl -e`、`ruby -e`、`pwsh -Command`）に一致しなかった。`ger preview` が「取り除く対象が見つかりません」で拒否し、E2E の r3-mcp-evasion の 8 件がチェックリストに落ちていた

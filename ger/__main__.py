@@ -1,4 +1,4 @@
-"""python3 -I ger/__main__.py で起動する（-I のためリポジトリのルートを明示的に追加。追加するのは GER 自身の場所だけ）。"""
+"""Started as python3 -I ger/__main__.py (-I requires adding the repository root explicitly; only GER's own location is added)."""
 import os
 import sys
 

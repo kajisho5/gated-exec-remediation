@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""ZES / ZET / GER のアイコンレイヤー SVG（1024×1024・白 1 色・効果なし）を生成する。
+"""Generates the icon layer SVGs of ZES / ZET / GER (1024x1024, one white color, no effects).
 
-    python3 brand/src/layers.py <zes|zet|ger>     # 要 shapely (pip install shapely)
+    python3 brand/src/layers.py <zes|zet|ger>     # needs shapely (pip install shapely)
 
-3 製品で共通のファイル。fresnel の brand/src/{lens,rings}.svg と同じく、色・光・影は .icon 側（spec.json）で付ける。
+A file shared by the 3 products. As with fresnel's brand/src/{lens,rings}.svg, color, light and shadow are added on the .icon side (spec.json).
 """
 import math, sys
 from pathlib import Path
@@ -22,7 +22,7 @@ def to_svg(geom):
 
 
 def shield(cx, top, w, h):
-    """上辺フラット・側辺ストレート・下端が尖る盾（角は半径 40 で丸める）"""
+    """A shield with a flat top edge, straight sides and a pointed bottom (corners rounded with radius 40)"""
     x0, x1 = cx - w / 2, cx + w / 2
     side = top + h * 0.42
     right = [(x1, top), (x1, side)]
@@ -44,7 +44,7 @@ def arch(x0, x1, top, bottom):
 
 def zes():
     s = shield(512, 140, 640, 752)
-    rings = unary_union([band(s, 62), band(s.buffer(-118, join_style=1), 62)])  # fresnel の同心リングを盾に
+    rings = unary_union([band(s, 62), band(s.buffer(-118, join_style=1), 62)])  # fresnel's concentric rings on the shield
     slash = affinity.rotate(box(497, 256, 527, 656), -38, origin=(512, 456))
     return {'shield.svg': rings, 'zero.svg': Point(512, 456).buffer(138, 128).difference(slash)}
 

@@ -1,12 +1,12 @@
-"""edit_json 操作（JSON と JSONC）— 可逆。
+"""edit_json operation (JSON and JSONC) - reversible.
 
 params: {"format": "json"|"jsonc",
-         "ops": [{"op": "remove"|"replace_const", "pointer": "/mcpServers/evil", "before_sha256": "<値の正規化 JSON の SHA-256>",
+         "ops": [{"op": "remove"|"replace_const", "pointer": "/mcpServers/evil", "before_sha256": "<SHA-256 of the canonical JSON of the value>",
                   "const"?: "default"}],
          "file_sha256", "expected_after_sha256"}
-- 各 pointer は GER の表 H（hazards.JSON_H）に一致すること（T-1）。replace_const の値は表 K にあること（T-2）
-- 変更後を別の方法でパースし直し、「変更前 − 取り除いた単位 ⊕ K の置き換え」と一致すること（T-3）
-- 書式とコメントは残す。キーの重複は拒否する
+- Each pointer must match GER's table H (hazards.JSON_H) (T-1). A replace_const value must be in table K (T-2)
+- The result is parsed again by a different method and must equal "before - removed units (+) K replacements" (T-3)
+- Formatting and comments are kept. Duplicate keys are rejected
 """
 from __future__ import annotations
 
@@ -24,25 +24,25 @@ MAX_OPS = 64
 
 def validate_params(params: dict, allowed_ops=("remove", "replace_const")) -> None:
     if not isinstance(params, dict) or set(params) != {"format", "ops", "file_sha256", "expected_after_sha256"}:
-        raise ActionError('params は {"format", "ops", "file_sha256", "expected_after_sha256"} であること（ger preview で作る）')
+        raise ActionError('params must be {"format", "ops", "file_sha256", "expected_after_sha256"} (built by ger preview)')
     if params["format"] not in ("json", "jsonc"):
-        raise ActionError("params.format は json / jsonc のいずれか")
+        raise ActionError("params.format must be json or jsonc")
     edit_common.check_sha(params["file_sha256"], "file_sha256")
     edit_common.check_sha(params["expected_after_sha256"], "expected_after_sha256")
     ops = params["ops"]
     if not isinstance(ops, list) or not 1 <= len(ops) <= MAX_OPS:
-        raise ActionError(f"params.ops は 1〜{MAX_OPS} 件であること")
+        raise ActionError(f"params.ops must have 1-{MAX_OPS} entries")
     for o in ops:
         if not isinstance(o, dict) or o.get("op") not in allowed_ops:
-            raise ActionError(f"op は {' / '.join(allowed_ops)} のいずれか")
+            raise ActionError(f"op must be one of {' / '.join(allowed_ops)}")
         want = {"op", "pointer", "before_sha256"} | ({"const"} if o["op"] == "replace_const" else set())
         if set(o) != want or not isinstance(o["pointer"], str) or not o["pointer"].startswith("/"):
-            raise ActionError(f"op の項目は {sorted(want)} であること（pointer は / で始まる JSON pointer）")
+            raise ActionError(f"op fields must be {sorted(want)} (pointer is a JSON pointer starting with /)")
         edit_common.check_sha(o["before_sha256"], "ops[].before_sha256")
 
 
 def check_ops(path: str, root, ops: list, allowed_h=None) -> None:
-    """T-1 / T-2: 各 op が現在の内容に対して H / K に一致すること（計画の値を信用しない）。"""
+    """T-1 / T-2: each op must match H / K against the current content (the plan's values are not trusted)."""
     for o in ops:
         try:
             _par, _idx, node = jsonedit.find(root, o["pointer"])
@@ -51,11 +51,11 @@ def check_ops(path: str, root, ops: list, allowed_h=None) -> None:
         val = jsonedit.to_python(node)
         hid = hazards.json_hazard(path, o["pointer"], val, o["op"])
         if hid is None or (allowed_h is not None and hid not in allowed_h):
-            raise ActionError(f"pointer {o['pointer']} は GER の危険パターンの表（H）に一致しません。取り除けません（T-1）")
+            raise ActionError(f"pointer {o['pointer']} does not match GER's hazard table (H); it cannot be removed (T-1)")
         if sha256(canonical(val)) != o["before_sha256"]:
-            raise ActionError(f"pointer {o['pointer']} の値が preview の時から変わっています（before_sha256 と不一致）")
+            raise ActionError(f"the value at pointer {o['pointer']} changed since preview (does not match before_sha256)")
         if o["op"] == "replace_const" and o.get("const") not in hazards.JSON_K.get(hid, ()):
-            raise ActionError(f"replace_const の値は定数表（K）にあるものだけです（T-2）: {hid}")
+            raise ActionError(f"a replace_const value must be in the constant table (K) (T-2): {hid}")
 
 
 def compute(path: str, data: bytes, fmt: str, ops: list, allowed_h=None) -> bytes:
@@ -63,15 +63,15 @@ def compute(path: str, data: bytes, fmt: str, ops: list, allowed_h=None) -> byte
     try:
         root = jsonedit.parse(text, fmt == "jsonc")
     except jsonedit.JsonEditError as e:
-        raise ActionError(f"{fmt} として解析できません: {e}") from None
+        raise ActionError(f"cannot parse as {fmt}: {e}") from None
     check_ops(path, root, ops, allowed_h)
     try:
         new, expected = jsonedit.apply_ops(text, fmt, ops)
         after = jsonedit.reparse(new, fmt)
     except (jsonedit.JsonEditError, ValueError) as e:
-        raise ActionError(f"変更後の内容を解析できません（T-3）: {e}") from None
+        raise ActionError(f"cannot parse the result (T-3): {e}") from None
     if canonical(after) != canonical(expected):
-        raise ActionError("変更後をパースし直した値が「変更前 − 取り除いた単位」と一致しません（T-3）")
+        raise ActionError("the re-parsed result does not equal \"before - removed units\" (T-3)")
     return new.encode("utf-8")
 
 
@@ -105,13 +105,13 @@ def select_ops(path: str, value, hids) -> list[dict]:
                 if hop == "replace_const":
                     o["const"] = hazards.JSON_K[hid][0]
                 ops.append(o)
-    # 入れ子の重複（親を取り除くなら子は不要）を除く
+    # Drop nested duplicates (a child is not needed when its parent is removed)
     ptrs = [o["pointer"] for o in ops]
     return [o for o in ops if not any(p != o["pointer"] and o["pointer"].startswith(p + "/") for p in ptrs)]
 
 
 def preview_compute(ctx, items, hids, allowed_h=None):
-    """(params, summary, diff)。params に select（H の id）があれば自動で ops を選ぶ。"""
+    """(params, summary, diff). If params has select (H ids), ops are chosen automatically."""
     target = items[0].action["target"]
     res = ctx.pool.add(fsutil.resolve(target))
     from .base import check_regular
@@ -121,7 +121,7 @@ def preview_compute(ctx, items, hids, allowed_h=None):
     try:
         fmt = jsonedit.detect_format(text)
     except jsonedit.JsonEditError as e:
-        raise ActionError(f"JSON / JSONC として解析できません: {e}") from None
+        raise ActionError(f"cannot parse as JSON / JSONC: {e}") from None
     root = jsonedit.parse(text, fmt == "jsonc")
     value = jsonedit.to_python(root)
     ops = []
@@ -130,12 +130,12 @@ def preview_compute(ctx, items, hids, allowed_h=None):
         if "select" in p:
             sel = p["select"] if isinstance(p["select"], list) else [p["select"]]
             if any(s not in hazards.JSON_H for s in sel):
-                raise ActionError(f"params.select は H の id（{', '.join(hazards.JSON_H)}）であること")
+                raise ActionError(f"params.select must be H ids ({', '.join(hazards.JSON_H)})")
             ops += select_ops(target, value, [s for s in sel if s in hids])
         else:
             for o in p.get("ops", []):
                 if "pointer" not in o:
-                    raise ActionError("ops[].pointer がありません")
+                    raise ActionError("ops[].pointer is missing")
                 _par, _idx, node = jsonedit.find(root, o["pointer"])
                 v = jsonedit.to_python(node)
                 n = {"op": o.get("op", "remove"), "pointer": o["pointer"], "before_sha256": sha256(canonical(v))}
@@ -148,7 +148,7 @@ def preview_compute(ctx, items, hids, allowed_h=None):
             seen.add(o["pointer"])
             dedup.append(o)
     if not dedup:
-        raise ActionError("取り除く対象（H に一致する危険な値）が見つかりません")
+        raise ActionError("nothing to remove (no dangerous value matching H)")
     new = compute(target, data, fmt, dedup, allowed_h)
     params = {"format": fmt, "ops": dedup, "file_sha256": sha256(data), "expected_after_sha256": sha256(new)}
     summary = f"{fmt}: " + ", ".join(f"{o['op']} {o['pointer']}" for o in dedup)

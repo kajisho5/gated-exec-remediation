@@ -2,7 +2,7 @@
   "name": "brand",
   "private": true,
   "type": "module",
-  "description": "ブランド資産の生成（fresnel の Liquid Glass アイコン形式）。生成物はコミット済み",
+  "description": "Brand asset generation (fresnel's Liquid Glass icon format). Generated files are committed",
   "scripts": {
     "build": "node build.mjs"
   },
