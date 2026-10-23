@@ -115,7 +115,7 @@ gated-exec-remediation/
 ├── schemas/vendor/{remediation-plan.schema.json, VENDOR.json}
 ├── tests/{run.py, run-tests.sh, test_ger.py, fixtures/zet-final-plan.json}
 ├── docs/design/{design.md, flow.svg}
-├── README.md
+├── README.md / README.ja.md
 └── CHANGELOG.md
 ```
 

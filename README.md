@@ -5,23 +5,27 @@
   </picture>
 </p>
 
-# gated-exec-remediation（GER）
+English | [日本語](README.ja.md)
 
-**Gated-Exec Remediation** — [Zero-Exec Shield（ZES）](https://github.com/kajisho5/zero-exec-shield) の修復層です。[ZET（zero-exec-triage）](https://github.com/kajisho5/zero-exec-triage) が確定した修復計画を、すべてのゲートを通過した場合にだけ実行します。3 層で唯一、変更を行う層です。
+# gated-exec-remediation (GER)
+
+**Gated-Exec Remediation** is the remediation layer of [Zero-Exec Shield (ZES)](https://github.com/kajisho5/zero-exec-shield). It executes a remediation plan finalized by [ZET (zero-exec-triage)](https://github.com/kajisho5/zero-exec-triage) only when every gate passes. It is the only one of the three layers that makes changes.
 
 ```
 [ZES] findings.json ──▶ [ZET] remediation-plan.json ──▶ [GER] remediation-log.json
         検知（実行なし）        判断（実行なし）              修復（ゲート付き実行）
 ```
 
-- **ゲート G-1〜G-8**: 1 つでも失敗したら何も変更しません
-- **承認は計画の中身に結びつく**: `approval_token` は確定 plan の `plan_hash`。承認後に計画を変えると止まります
-- **dry-run 必須**: 同一入力の dry-run 成功記録（既定 24 時間以内）が無いと apply できません
-- **全件ロールバック**: 1 件でも失敗したら残りを実行せず、適用済みを逆順に戻します
-- **外部プロセスを起動しない**: chmod も `os.fchmod` で行います。Python 3.11 以上の標準ライブラリのみ
-- **初版の操作は chmod のみ**: `write_config` / `rotate_secret` を含む計画は全体を拒否します
+(Detection, no execution → decision, no execution → remediation, gated execution.)
 
-## 使い方
+- **Gates G-1 to G-8**: if any single gate fails, nothing is changed
+- **Approval is bound to the plan's content**: `approval_token` is the finalized plan's `plan_hash`. Changing the plan after approval stops execution
+- **dry-run is mandatory**: apply is refused unless there is a successful dry-run record for the same input (within 24 hours by default)
+- **Full rollback**: if even one item fails, the remaining items are not executed and those already applied are reverted in reverse order
+- **No external processes**: even chmod is done with `os.fchmod`. Python 3.11+ standard library only
+- **The initial release supports chmod only**: a plan containing `write_config` / `rotate_secret` is rejected as a whole
+
+## Usage
 
 ```bash
 bin/ger verify  ger-input.json --operator ops
@@ -29,7 +33,9 @@ bin/ger dry-run ger-input.json --operator ops -o dry-run-log.json
 bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode だけ "apply" に変えた入力
 ```
 
-入力（[schemas/ger-input.schema.json](schemas/ger-input.schema.json)）:
+(`ger-input.apply.json` is the same input with only `mode` changed to `"apply"`.)
+
+Input ([schemas/ger-input.schema.json](schemas/ger-input.schema.json)):
 
 ```json
 {
@@ -46,54 +52,58 @@ bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode �
 }
 ```
 
-| 終了コード | 意味 |
+(`plan` holds ZET's finalized remediation-plan.json.)
+
+| Exit code | Meaning |
 |---|---|
-| 0 | 成功 |
-| 3 | ゲートで拒否（何も変更していない） |
-| 4 | 実行中に失敗し、全件ロールバック済み |
-| 5 | ロールバックも完了できなかった（要手動対応） |
-| 64 / 70 | 引数・環境エラー / 内部エラー |
+| 0 | Success |
+| 3 | Rejected by a gate (nothing changed) |
+| 4 | Failed during execution; everything rolled back |
+| 5 | Rollback could not be completed either (manual action required) |
+| 64 / 70 | Usage or environment error / internal error |
 
-環境変数: `GER_LOG_DIR`（監査ログ、既定 `~/.local/state/ger/`）、`GER_DRYRUN_TTL`（dry-run 記録の有効秒数、既定 86400、最大 604800）。
-`--now`（現在時刻の上書き）はテスト専用で、`GER_ALLOW_NOW_OVERRIDE=1` のときだけ受け付けます（それ以外は終了コード 64）。
+Environment variables: `GER_LOG_DIR` (audit log, default `~/.local/state/ger/`), `GER_DRYRUN_TTL` (validity of a dry-run record in seconds, default 86400, maximum 604800).
+`--now` (overrides the current time) is test-only and is accepted only when `GER_ALLOW_NOW_OVERRIDE=1` is set (otherwise exit code 64).
 
-`-o` の出力先は変更を始める前に確認します（親ディレクトリが存在し書き込めること、既存のディレクトリでないこと、監査ログ・監査ログのディレクトリ内のファイル・入力ファイル・計画の対象のいずれとも同じファイルでないこと。実パスと、既存なら `st_dev`/`st_ino` で比較するためシンボリックリンクやハードリンク経由でも拒否します）。違反は終了コード 64 で、計画の対象との衝突は入力を読んだ後に判明するため監査ログに `result: "error"` として理由付きで記録します。remediation-log は監査ログより先に書き出し、書けなかった場合は成功として記録しません（apply で変更が残っている可能性があるときは終了コード 5）。
+The `-o` destination is checked before any change begins: its parent directory must exist and be writable, it must not be an existing directory, and it must not be the same file as the audit log, a file inside the audit log directory, an input file, or any target of the plan. Because the comparison uses the real path and, for existing files, `st_dev`/`st_ino`, it is rejected even via symbolic or hard links. A violation yields exit code 64; a collision with a plan target is only discovered after the input has been read, so it is recorded in the audit log as `result: "error"` with the reason. The remediation-log is written before the audit log, and if it cannot be written the run is not recorded as a success (exit code 5 when apply may have left changes in place).
 
-## ゲート
+## Gates
 
-| # | 拒否する条件 |
+| # | Rejected when |
 |---|---|
-| G-1 | スキーマ不適合（入力・plan とも strict、版固定）、入力に `findings` がある、mode とコマンドの不一致、remediate の item で `finding_id` が重複（実行結果を item に一意に対応づけられない）、`approved_at` / `created_at` が実在しない日時（2 月 30 日、25 時など）、入力 JSON の object でキーが重複・入れ子が 64 段を超える |
-| G-2 | plan.status が ok / partial 以外（draft・error） |
-| G-3 | plan_hash が本体と不一致、approval.plan_id 不一致、approval_token ≠ plan_hash、approved_at が未来または計画作成前 |
-| G-4 | `--operator` が承認者に含まれる（人名は大文字小文字を区別せずに比較） |
-| G-5 | 操作が allowed_actions に無い、または GER 未対応 |
-| G-6 | reversible / skillpact_effects が無い（ZET 確定済みでない）、reversible が操作の性質と不一致、不可逆操作で承認者 2 名未満（大文字小文字だけが異なる名前は同一人物として数える） |
-| G-7 | 対象が正規化済みの絶対パスでない・存在しない・シンボリックリンク（途中経路を含む）・通常ファイル/ディレクトリ以外・所有者でない・計画内で重複（ハードリンクで同じ実体を指す場合を含む）、chmod の mode が `^0[0-7]{3}$` 以外 |
-| G-8 | apply 時に、同一 plan_hash・同一入力（mode 以外）の dry-run 成功記録が有効期限内に無い、または監査ログのハッシュチェーンが壊れている |
+| G-1 | Schema mismatch (strict and version-pinned for both input and plan), the input contains `findings`, mode does not match the command, a remediate item has a duplicate `finding_id` (results could not be mapped one-to-one to items), `approved_at` / `created_at` is a nonexistent date-time (February 30, hour 25, etc.), or an object in the input JSON has duplicate keys or nesting deeper than 64 levels |
+| G-2 | plan.status is anything other than ok / partial (draft, error) |
+| G-3 | plan_hash does not match the body, approval.plan_id does not match, approval_token ≠ plan_hash, or approved_at is in the future or before the plan was created |
+| G-4 | `--operator` is among the approvers (names are compared case-insensitively) |
+| G-5 | The action is not in allowed_actions, or GER does not support it |
+| G-6 | reversible / skillpact_effects is missing (not finalized by ZET), reversible does not match the nature of the action, or an irreversible action has fewer than 2 approvers (names differing only in case count as the same person) |
+| G-7 | The target is not a normalized absolute path, does not exist, is a symbolic link (including any intermediate path component), is not a regular file/directory, is not owned by the user, or is duplicated within the plan (including hard links to the same underlying file); or the chmod mode does not match `^0[0-7]{3}$` |
+| G-8 | On apply, there is no unexpired successful dry-run record with the same plan_hash and the same input (apart from mode), or the audit log's hash chain is broken |
 
-実行中は、事前検証時の実体 ID（`st_dev`・`st_ino`・`st_ctime_ns`）と一致する場合だけ変更します。i-node 番号は削除・再作成で再利用されることがあるため、ctime も含めて同一の実体かを判定しています。
+During execution, a change is made only if the object's identity matches the one captured during pre-validation (`st_dev`, `st_ino`, `st_ctime_ns`). Because inode numbers can be reused after deletion and re-creation, ctime is included to determine that it is the same object.
 
-## スキーマ
+## Schemas
 
-| ファイル | 所有 | 内容 |
+| File | Owner | Description |
 |---|---|---|
-| [schemas/remediation-log.schema.json](schemas/remediation-log.schema.json) | **GER** | 出力契約（契約 §6 に `mode` と `plan_hash` を追加） |
-| [schemas/ger-input.schema.json](schemas/ger-input.schema.json) | GER | 入力 |
-| [schemas/vendor/remediation-plan.schema.json](schemas/vendor/remediation-plan.schema.json) | ZET | 版固定の写し（`schemas/vendor/VENDOR.json` に取り込み元コミットと SHA-256） |
+| [schemas/remediation-log.schema.json](schemas/remediation-log.schema.json) | **GER** | Output contract (adds `mode` and `plan_hash` to contract §6) |
+| [schemas/ger-input.schema.json](schemas/ger-input.schema.json) | GER | Input |
+| [schemas/vendor/remediation-plan.schema.json](schemas/vendor/remediation-plan.schema.json) | ZET | Version-pinned copy (source commit and SHA-256 in `schemas/vendor/VENDOR.json`) |
 
-## 監査ログ
+## Audit log
 
-`$GER_LOG_DIR/ger-audit.jsonl`。1 行 1 レコード（command / operator / plan_id / plan_hash / input_hash / output_hash / started_at / finished_at / result / gate_failed / prev_hash）。拒否も記録します。ログに書けない場合は実行しません。既存のログディレクトリが実行ユーザーの所有でない、またはグループ・他者から書き込み可能な場合も実行しません（終了コード 64）。
+`$GER_LOG_DIR/ger-audit.jsonl`. One record per line (command / operator / plan_id / plan_hash / input_hash / output_hash / started_at / finished_at / result / gate_failed / prev_hash). Rejections are logged too. If the log cannot be written, nothing is executed. Nothing is executed either if the existing log directory is not owned by the running user or is writable by group or others (exit code 64).
 
-## テスト
+## Tests
 
 ```bash
 tests/run-tests.sh   # 単体テスト（41 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
 ```
 
-root で実行すると「読めないファイル（0000）」のテストは SKIP になります（一般ユーザーでは 41 件すべて実行）。ZET が確定した実際の計画（`tests/fixtures/zet-final-plan.json`）で、スキーマと plan_hash の互換性も確認しています。
+This runs the unit tests (41; chmod, rollback and swap detection are verified on real files in a temporary directory) plus strace-based verification that no external process is launched.
 
-## ライセンス
+When run as root, the "unreadable file (0000)" test is SKIPped (as a regular user all 41 tests run). Schema and plan_hash compatibility are also checked against an actual plan finalized by ZET (`tests/fixtures/zet-final-plan.json`).
 
-[Apache License 2.0](LICENSE)。脆弱性の報告は [SECURITY.md](SECURITY.md) を参照してください。
+## License
+
+[Apache License 2.0](LICENSE). To report a vulnerability, see [SECURITY.md](SECURITY.md).
