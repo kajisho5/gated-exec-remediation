@@ -390,6 +390,28 @@ class TestEdits(R):
         self.restore()
         self.assertEqual({x: fhash(x) for x in before}, before)
 
+    def test_mcp_danger_matches_zes(self):
+        # ZES §17 の MCP_DANGER_RE（round 3 の回避形を含む）と同じものを危険とし、それ以外は選ばない
+        from ger import hazards
+        bad = [("cmd.exe", ["/c", "echo x"]), ("deno", ["eval", "Deno.exit()"]), ("node", ["--eval", "1"]),
+               ("/bin/bash", ["--norc", "-c", "touch x"]), ("perl", ["-e", "1"]), ("pwsh", ["-NoProfile", "-Command", "x"]),
+               ("ruby", ["-e", "1"]), ("bash", ["-xc", "touch x"]), ("PowerShell", ["-EncodedCommand", "AA"]),
+               ("python3", ["-Ic", "1"]), ("php", ["-r", "1"]), ("osascript", ["-e", "1"]), ("bun", ["-p", "1"]),
+               ("curl", ["https://x.invalid"]), ("sh", ["-c", "x\nnpx y"])]
+        good = [("npx", ["-y", "foo"]), ("node", ["server.js"]), ("python3", ["-m", "srv"]), ("uvx", ["mcp"]),
+                ("/usr/bin/inert", []), ("mybash", ["-c", "x"]), ("sh", ["script.sh"]), ("node", ["--inspect", "srv.js"])]
+        for c, a in bad:
+            self.assertTrue(hazards.dangerous_server({"command": c, "args": a}), (c, a))
+        for c, a in good:
+            self.assertFalse(hazards.dangerous_server({"command": c, "args": a}), (c, a))
+        m = self.root / ".mcp.json"
+        m.write_text(json.dumps({"mcpServers": {"x": {"command": "cmd.exe", "args": ["/c", "echo x"]},
+                                                "ok": {"command": "node", "args": ["server.js"]}}}))
+        p = self.preview(self.plan([self.item({"type": "disable_mcp_server", "target": str(m), "params": {"select": "mcp.server"}})]))
+        self.assertEqual([o["pointer"] for o in p["items"][0]["action"]["params"]["ops"]], ["/mcpServers/x"])
+        self.run_plan(p)
+        self.assertEqual(json.loads(m.read_text()), {"mcpServers": {"ok": {"command": "node", "args": ["server.js"]}}})
+
     def test_tightening_only_rejections(self):
         s = self.root / ".claude" / "settings.json"
         s.parent.mkdir()
