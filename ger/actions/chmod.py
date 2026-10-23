@@ -12,17 +12,13 @@ import os
 import re
 import stat
 
+from .base import ActionError, PreviewResult, Step
+
 TYPE = "chmod"
 REVERSIBLE = True
+DESTRUCTIVE = False
+ORDER = 2
 _MODE = re.compile(r"^0[0-7]{3}$")
-
-
-class ActionError(Exception):
-    """applied=True は「権限の変更は既に行われた可能性があり、検証できなかった」ことを示す（ロールバック不能）。"""
-
-    def __init__(self, message: str, applied: bool = False):
-        super().__init__(message)
-        self.applied = applied
 
 
 def parse_params(params: dict) -> int:
@@ -92,3 +88,59 @@ def set_mode(target: str, mode: int, ident: Ident) -> Ident:
     if after.st_mode & 0o7777 != mode:
         raise ActionError(f"適用後の権限が {fmt(after.st_mode)} です（期待値 {fmt(mode)}）", applied=True)
     return ident_of(after)
+
+
+def validate_params(params: dict) -> None:
+    parse_params(params)
+
+
+class ChmodStep(Step):
+    type = TYPE
+    order = ORDER
+
+    def __init__(self, items, target, mode, ident, before):
+        super().__init__(items, target)
+        self.mode, self.ident, self.before = mode, ident, before
+        self.noop = before == mode
+        self.applied_ident = None
+
+    def before_after(self):
+        return fmt(self.before), fmt(self.mode)
+
+    def apply(self, rt):
+        self.applied_ident = set_mode(self.target, self.mode, self.ident)
+        self.undo = {"op": "chmod", "target": self.target, "before": self.before, "ident": list(self.applied_ident)}
+        rt.note(rt.step_no, self.undo)
+
+    def rollback(self, rt):
+        set_mode(self.target, self.before, self.applied_ident)
+
+
+def rollback_undo(u: dict) -> None:
+    set_mode(u["target"], u["before"], tuple(u["ident"]))
+
+
+def prepare(ctx, items):
+    """事前検証（G-7 / G-10）。chmod は現在の mode に無い権限を足せない（絞る操作だけ）。"""
+    if len(items) != 1:
+        raise ActionError("chmod は group にまとめられません")
+    a = items[0].action
+    t = a["target"]
+    mode = parse_params(a["params"])
+    st = inspect(t)
+    if os.path.realpath(t) != t:
+        raise ActionError("パスの途中にシンボリックリンクがあります")
+    before = st.st_mode & 0o7777
+    added = mode & ~before
+    if added:  # 修復は権限を絞る操作に限る。改ざんされた plan でも権限を緩められないようにする
+        raise ActionError(f"chmod {fmt(mode)} は現在の mode {fmt(before)} に無い権限（{added:04o}）を足します"
+                          "（権限を絞る操作だけを受け付けます）")
+    step = ChmodStep(items, t, mode, ident_of(st), before)
+    step.st = st
+    return step
+
+
+def preview(ctx, items) -> PreviewResult:
+    p = items[0].action["params"]
+    parse_params(p)
+    return PreviewResult(p, f"chmod {p['mode']}")
