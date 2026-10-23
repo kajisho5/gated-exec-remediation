@@ -30,7 +30,8 @@ def _schema(name: str, inst, label: str, gate: str = "G-1") -> list[Rejection]:
     return [Rejection(gate, f"{label}{e}") for e in validator(name).errors(inst)]
 
 
-def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl: int) -> tuple[list[Rejection], list[Prepared]]:
+def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl: int,
+                now_override: bool = False) -> tuple[list[Rejection], list[Prepared]]:
     # G-1 スキーマ・版固定・飛び越し禁止
     if isinstance(inp, dict) and "findings" in inp:
         return [Rejection("G-1", "入力に findings があります（修復層は ZES の出力を直接読まない）")], []
@@ -144,6 +145,6 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
         broken = audit.verify_chain()
         if broken:
             return [Rejection("G-8", f"監査ログのハッシュチェーンが壊れているため dry-run 記録を信用できません（{broken[0]}）")], []
-        if audit.find_dry_run(ph, input_hash(inp), now, dry_run_ttl) is None:
+        if audit.find_dry_run(ph, input_hash(inp), now, dry_run_ttl, now_override) is None:
             return [Rejection("G-8", f"同一計画・同一入力の dry-run 成功記録が {dry_run_ttl} 秒以内にありません")], []
     return [], prepared

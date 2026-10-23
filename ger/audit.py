@@ -94,12 +94,19 @@ def verify_chain(path: Path | None = None) -> list[str]:
     return problems
 
 
-def find_dry_run(plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds: int) -> dict | None:
-    """同一計画・同一入力の dry-run 成功記録のうち、有効期限内の最新のものを返す。"""
+def find_dry_run(plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds: int,
+                 now_override: bool = False) -> dict | None:
+    """同一計画・同一入力の dry-run 成功記録のうち、有効期限内の最新のものを返す。
+
+    --now（時刻の上書き）で記録した dry-run は、今回も --now を使う場合（now_override）だけ数える。
+    未来の時刻で記録した dry-run が、後で --now なしの本番 apply を通してしまわないため。
+    """
     found = None
     for line in _read_lines(log_path()):
         rec = _parse(line)
         if rec is None:
+            continue
+        if rec.get("now_override", False) is not False and not now_override:
             continue
         if (rec.get("command") == "dry-run" and rec.get("result") == "ok"
                 and rec.get("plan_hash") == plan_hash and rec.get("input_hash") == input_hash):

@@ -118,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
 
     clock = (lambda: now) if args.now else now_utc
     record = {"command": args.command, "operator": args.operator, "started_at": fmt_ts(clock())}
+    if args.now:  # --now 付きの dry-run 記録は --now なしの apply の根拠にしない（G-8）
+        record["now_override"] = True
     code = EXIT_OK
     rejections = []
     log_obj = None
@@ -139,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
             except (TypeError, ValueError):
                 pass
         try:
-            rejections, prepared = check_gates(inp, args.operator, now, args.command, ttl)
+            rejections, prepared = check_gates(inp, args.operator, now, args.command, ttl, now_override=bool(args.now))
             clash = None if rejections or args.command == "verify" else _output_clash(args.output, prepared)
             if rejections:
                 code = EXIT_REJECTED

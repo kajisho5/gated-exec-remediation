@@ -17,7 +17,7 @@ from unittest import mock
 
 from ger import audit, cli, executor, gates
 from ger.actions import chmod
-from ger.core import ROOT, canonical, input_hash, now_utc, plan_hash, validator
+from ger.core import ROOT, canonical, fmt_ts, input_hash, now_utc, plan_hash, validator
 
 FIX = ROOT / "tests" / "fixtures"
 PLAN_ID = "11111111-2222-4333-8444-555555555555"
@@ -325,6 +325,18 @@ class TestGates(Base):
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
         self.assertRejected(ap, "G-8", command="apply")
 
+    def test_g8_now_override_dry_run_does_not_unlock_real_apply(self):
+        # --now 付きの dry-run は記録に now_override: true を残し、--now なしの apply の根拠にならない
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp, now=fmt_ts(now_utc()))[0], 0)
+        rec = json.loads(audit.log_path().read_text().splitlines()[-1])
+        self.assertIs(rec["now_override"], True)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        self.assertRejected(ap, "G-8", command="apply", now=None)
+        self.assertNotIn("now_override", json.loads(audit.log_path().read_text().splitlines()[-1]))
+        self.assertEqual(self.ger("verify", inp, now=None)[0], 0)
+        self.assertNotIn("now_override", json.loads(audit.log_path().read_text().splitlines()[-1]))
+
     def test_g8_garbage_audit_log_is_rejected_not_crash(self):
         # 多バイト文字の途中で切れた最終行・object でない JSON 行・任意のバイト列は G-8 の拒否（70 ではない）
         inp = self.ger_input()
@@ -335,7 +347,7 @@ class TestGates(Base):
             with open(audit.log_path(), "ab") as f:
                 f.write(garbage + b"\n")
             self.assertTrue(audit.verify_chain(), garbage)
-            self.assertIsNotNone(audit.find_dry_run(inp["plan"]["plan_hash"], input_hash(inp), now_utc(NOW), 86400))
+            self.assertIsNotNone(audit.find_dry_run(inp["plan"]["plan_hash"], input_hash(inp), now_utc(NOW), 86400, True))
             self.assertRejected(ap, "G-8", command="apply")
 
 

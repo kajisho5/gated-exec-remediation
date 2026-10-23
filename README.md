@@ -63,7 +63,7 @@ Input ([schemas/ger-input.schema.json](schemas/ger-input.schema.json)):
 | 64 / 70 | Usage or environment error / internal error |
 
 Environment variables: `GER_LOG_DIR` (audit log, default `$XDG_STATE_HOME/ger/`, or `~/.local/state/ger/` when `XDG_STATE_HOME` is unset), `GER_DRYRUN_TTL` (validity of a dry-run record in seconds, default 86400, maximum 604800).
-`--now` (overrides the current time) is test-only and is accepted only when `GER_ALLOW_NOW_OVERRIDE=1` is set (otherwise exit code 64).
+`--now` (overrides the current time) is test-only and is accepted only when `GER_ALLOW_NOW_OVERRIDE=1` is set (otherwise exit code 64). A run with `--now` is recorded in the audit log with `now_override: true`, and such a dry-run record does not count towards G-8 for an apply run without `--now`.
 
 The `-o` destination is checked before any change begins: its parent directory must exist and be writable, it must not be an existing directory, and it must not be the same file as the audit log, a file inside the audit log directory, an input file, or any target of the plan. Because the comparison uses the real path and, for existing files, `st_dev`/`st_ino`, it is rejected even via symbolic or hard links. A violation yields exit code 64; a collision with a plan target is only discovered after the input has been read, so it is recorded in the audit log as `result: "error"` with the reason. The remediation-log is written before the audit log, and if it cannot be written the run is not recorded as a success (exit code 5 when apply may have left changes in place).
 
@@ -92,7 +92,7 @@ During execution, a change is made only if the object's identity matches the one
 
 ## Audit log
 
-`$GER_LOG_DIR/ger-audit.jsonl`. One record per line (command / operator / plan_id / plan_hash / input_hash / output_hash / started_at / finished_at / result / gate_failed / prev_hash). Rejections are logged too. If the log cannot be written, nothing is executed. Nothing is executed either if the existing log directory is not owned by the running user or is writable by group or others (exit code 64).
+`$GER_LOG_DIR/ger-audit.jsonl`. One record per line (command / operator / plan_id / plan_hash / input_hash / output_hash / started_at / finished_at / result / gate_failed / now_override / prev_hash). Rejections are logged too. If the log cannot be written, nothing is executed. Nothing is executed either if the existing log directory is not owned by the running user or is writable by group or others (exit code 64).
 
 ## Tests
 
@@ -100,9 +100,9 @@ During execution, a change is made only if the object's identity matches the one
 tests/run-tests.sh   # 単体テスト（43 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
 ```
 
-This runs the unit tests (43; chmod, rollback and swap detection are verified on real files in a temporary directory) plus strace-based verification that no external process is launched.
+This runs the unit tests (44; chmod, rollback and swap detection are verified on real files in a temporary directory) plus strace-based verification that no external process is launched.
 
-When run as root, the "unreadable file (0000)" test is SKIPped (as a regular user all 43 tests run). Schema and plan_hash compatibility are also checked against an actual plan finalized by ZET (`tests/fixtures/zet-final-plan.json`).
+When run as root, the "unreadable file (0000)" test is SKIPped (as a regular user all 44 tests run). Schema and plan_hash compatibility are also checked against an actual plan finalized by ZET (`tests/fixtures/zet-final-plan.json`).
 
 ## License
 
