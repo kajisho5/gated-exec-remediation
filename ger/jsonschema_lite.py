@@ -33,8 +33,25 @@ class SchemaError(Exception):
     """スキーマ自体が不正、または未対応キーワードを含む。"""
 
 
+# 端末に解釈されうる文字: C0 制御文字・DEL・C1 制御文字（Cc）、行・段落区切り、双方向テキストの制御文字
+_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]")
+
+
+def safe_text(s: Any) -> str:
+    """入力に由来する文字列を端末に安全に表示できる形にする（制御文字を \\xNN / \\uNNNN にする）。
+
+    エラーメッセージにキー名・パスなどの入力値を含めるとき、ESC（OSC / CSI）や C1 制御文字で
+    端末のタイトル変更・画面消去などを起こさせないため。結果は制御文字を含まないので、何度適用しても
+    変わらない（検証器と CLI の両方で適用しても二重にエスケープしない）。バックスラッシュはそのまま残す。
+    """
+    def esc(m: re.Match) -> str:
+        c = ord(m.group())
+        return f"\\x{c:02x}" if c < 0x100 else f"\\u{c:04x}"
+    return _UNSAFE.sub(esc, str(s))
+
+
 def _ptr(path: list) -> str:
-    return "/" + "/".join(str(p) for p in path) if path else "/"
+    return "/" + "/".join(safe_text(p) for p in path) if path else "/"
 
 
 _patterns: dict[str, re.Pattern] = {}
@@ -171,7 +188,7 @@ class Validator:
                 elif "additionalProperties" in s:
                     ap = s["additionalProperties"]
                     if ap is False:
-                        out.append(f"{_ptr(path)}: unknown field '{k}'")
+                        out.append(f"{_ptr(path)}: unknown field '{safe_text(k)}'")
                     elif isinstance(ap, dict):
                         self._v(ap, v, path + [k], out)
         if "if" in s:

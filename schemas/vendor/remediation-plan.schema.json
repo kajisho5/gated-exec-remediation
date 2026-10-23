@@ -12,6 +12,7 @@
     "created_at": { "$ref": "#/$defs/ts" },
     "status": { "enum": ["ok", "partial", "error", "draft"] },
     "plan_hash": { "$ref": "#/$defs/sha256", "description": "plan_hash を除いた本体の正規化 JSON の SHA-256（A-6）。確定 plan のみ" },
+    "now_override": { "const": true, "description": "draft / finalize を --now（テスト専用の時刻上書き）で実行した plan。GER は GER_ALLOW_NOW_OVERRIDE=1 のときだけ受理する。省略は false と同じ" },
     "items": { "type": "array", "items": { "$ref": "#/$defs/item" } },
     "held": { "type": "array", "items": { "$ref": "#/$defs/held" } }
   },
@@ -46,6 +47,7 @@
         "approved_by": { "type": "array", "items": { "$ref": "#/$defs/person" } },
         "level_effective": { "$ref": "#/$defs/level", "description": "SkillPact 規則で引き上げた後の重大度（A-3）。入力の level は改変しない" },
         "action": { "anyOf": [{ "$ref": "#/$defs/action" }, { "type": "null" }] },
+        "skillpact": { "$ref": "#/$defs/skillpact", "description": "対象 finding の skillpact の要約。finalize で付与（GER が I-5 / I-6 / I-7 を plan だけで再検査する）" },
         "constraints": { "$ref": "#/$defs/constraints" }
       }
     },
@@ -66,7 +68,20 @@
         "target": { "type": "string", "pattern": "^/" },
         "params": { "type": "object" },
         "reversible": { "type": "boolean", "description": "操作種別から ZET が決める（A-4）。finalize で付与" },
-        "skillpact_effects": { "type": "array", "uniqueItems": true, "items": { "type": "string" }, "description": "対象 finding の skillpact.declared_effects（A-4）。finalize で付与" }
+        "skillpact_effects": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/effect" }, "description": "対象 finding の skillpact.declared_effects（A-4）。finalize で付与" },
+        "evidence_hash": { "$ref": "#/$defs/sha256", "description": "対象 finding の evidence_hash（ZES の規則: 100MB 以下の通常ファイルは内容の SHA-256、100MB 超はパス・サイズ・mtime の SHA-256）。finalize で付与。GER は G-7 で現在のファイルと比べる" }
+      }
+    },
+    "effect": { "enum": ["read", "write", "network", "exec", "spend", "send"], "description": "SkillPact 0.8 の 6 効果（ZES findings.schema.json の $defs.effect と同じ）" },
+    "skillpact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signed", "divergence", "diff_anomaly", "declared_effects"],
+      "properties": {
+        "signed": { "type": "boolean", "description": "署名フィールドがあるか（未検証）" },
+        "divergence": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/effect" } },
+        "diff_anomaly": { "type": "boolean" },
+        "declared_effects": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/effect" } }
       }
     },
     "constraints": {

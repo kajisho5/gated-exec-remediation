@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import datetime as dt
 import hashlib
 import io
 import json
@@ -661,6 +662,39 @@ class TestExecution(Base):
         os.environ.pop("GER_DRYRUN_TTL")
         os.environ["GER_LOG_DIR"] = "/proc/ger-cannot-write"
         self.assertEqual(self.ger("verify", self.ger_input())[0], 64)
+
+
+class TestRegressionsR3Fixes(Base):
+    """round 3 の指摘（F1 / F2 / F3 / F5 / F6 / F7 / F8 / F10 / F14 / F15）の回帰テスト。"""
+
+    def reject_msg(self, inp, gate, text, command="verify", **kw):
+        code, err = self.ger(command, inp, **kw)
+        self.assertEqual(code, 3, err)
+        self.assertIn(gate, err)
+        self.assertIn(text, err)
+        self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "拒否時に変更されています")
+        return err
+
+    def rehash(self, p):
+        p["plan_hash"] = plan_hash(p)
+        return p
+
+    # F8: 入力由来の文字列（キー名・対象パス）の制御文字をエスケープして表示する
+    def test_f8_control_characters_escaped(self):
+        bad = self.ger_input(); bad["x\x1b]0;PWNED\x07\x1b[2J\x9b"] = 1
+        code, err = self.ger("verify", bad)
+        self.assertEqual(code, 3)
+        for c in ("\x1b", "\x07", "\x9b"):
+            self.assertNotIn(c, err)
+        self.assertIn("\\x1b]0;PWNED", err)
+        t = self.d / "evil\x1b[2Jdir"; t.mkdir(); os.chmod(t, 0o755)
+        inp = self.ger_input(plan=self.plan([t]))
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", str(t / "x.json"))
+        self.assertEqual(code, 64, err)
+        self.assertNotIn("\x1b", err)
+        self.assertIn("evil\\x1b[2Jdir", err)
 
 
 if __name__ == "__main__":
