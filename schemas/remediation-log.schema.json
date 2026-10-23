@@ -2,15 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/kajisho5/gated-exec-remediation/schemas/remediation-log.schema.json",
   "title": "GER remediation-log.json",
-  "description": "GER（修復層）の出力契約。GER が所有する。契約 §6 に mode と plan_hash を追加（どの計画のどの実行かを一意にするため）。",
+  "description": "GER（修復層）の出力契約。GER が所有する。契約 §6 に mode と plan_hash を追加（どの計画のどの実行かを一意にするため）。1.1 で result に pending_manual（checklist）を、results に group / quarantine_ids / followup を追加し、mode に restore 系と recover を追加。restore では plan_id が restore_id、plan_hash が restore-request の承認トークン。",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "plan_id", "plan_hash", "mode", "started_at", "finished_at", "status", "results"],
   "properties": {
-    "schema_version": { "const": "1.0" },
+    "schema_version": { "enum": ["1.0", "1.1"] },
     "plan_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
     "plan_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-    "mode": { "enum": ["dry-run", "apply"] },
+    "mode": { "enum": ["dry-run", "apply", "restore-dry-run", "restore", "recover"] },
     "started_at": { "$ref": "#/$defs/ts" },
     "finished_at": { "$ref": "#/$defs/ts" },
     "status": { "enum": ["ok", "partial", "error"] },
@@ -26,9 +26,12 @@
           "target": { "type": ["string", "null"] },
           "before": { "type": ["string", "null"] },
           "after": { "type": ["string", "null"] },
-          "result": { "enum": ["applied", "skipped", "failed", "rolled_back"] },
+          "result": { "enum": ["applied", "skipped", "failed", "rolled_back", "pending_manual", "confirmed"] },
           "reason": { "type": "string" },
-          "applied_at": { "anyOf": [{ "$ref": "#/$defs/ts" }, { "type": "null" }] }
+          "applied_at": { "anyOf": [{ "$ref": "#/$defs/ts" }, { "type": "null" }] },
+          "group": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
+          "quarantine_ids": { "type": "array", "items": { "type": "string" }, "description": "隔離ストアのエントリ（隔離したもの・編集前のバックアップ）。ger restore で戻せる" },
+          "followup": { "type": "array", "items": { "type": "string", "pattern": "^CL-[A-Z0-9-]{1,32}$" }, "description": "自動修復の後に残る必須の手作業（ger confirm で記録する）" }
         }
       }
     }

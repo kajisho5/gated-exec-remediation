@@ -177,7 +177,7 @@ def scan_chain(path: Path | None = None) -> tuple[int, list[str]]:
 
 
 def find_dry_run(plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds: int,
-                 now_override: bool = False) -> dict | None:
+                 now_override: bool = False, dry_cmd: str = "dry-run", apply_cmd: str = "apply") -> dict | None:
     """同一計画・同一入力の dry-run 成功記録のうち、有効期限内で未使用の最新のものを返す。
 
     - 数えるのは今回と同じ時刻の扱いの記録だけ: --now なしの apply は --now なしの dry-run だけ、
@@ -193,10 +193,10 @@ def find_dry_run(plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds:
             continue
         if (rec.get("now_override", False) is not False) != now_override:
             continue
-        if rec.get("command") == "apply" and rec.get("result") in EXECUTED_RESULTS:
+        if rec.get("command") == apply_cmd and rec.get("result") in EXECUTED_RESULTS:
             found = None  # それまでの dry-run は使用済み
             continue
-        if rec.get("command") == "dry-run" and rec.get("result") == "ok":
+        if rec.get("command") == dry_cmd and rec.get("result") == "ok":
             try:
                 age = (now - parse_ts(rec["finished_at"])).total_seconds()
             except (KeyError, TypeError, ValueError):  # 解釈できない記録は有効な dry-run として扱わない
@@ -204,3 +204,8 @@ def find_dry_run(plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds:
             if 0 <= age <= ttl_seconds:
                 found = rec
     return found
+
+
+def records() -> list[dict]:
+    """監査ログのすべての記録（解釈できない行は飛ばす）。"""
+    return [r for r in (_parse(line) for line in _read_lines(log_path())) if r is not None]

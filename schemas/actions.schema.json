@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kajisho5/gated-exec-remediation/schemas/actions.schema.json",
+  "title": "GER action params",
+  "description": "GER（修復層）が実行できる操作と、その params の形。GER が所有し、ZET は schemas/vendor に版を固定して写す。検証する値は {\"type\", \"params\"}（plan の action から取り出したもの）。確定した計画の params はすべてこの形に合うこと（draft の params.select は ger preview が具体的な値に置き換える）。形に合っても、取り除く単位が GER の危険パターンの表（H）に一致するか、足すものが定数表（K）にあるか、パースし直した結果が一致するか（定義 T）は GER が現在の内容に対して評価する。未知フィールドは拒否（strict）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "params"],
+  "properties": {
+    "type": { "enum": ["chmod", "quarantine", "edit_json", "edit_toml", "remove_line", "disable_mcp_server", "checklist"] },
+    "params": { "type": "object" }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "chmod" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/chmod" } } } },
+    { "if": { "properties": { "type": { "const": "quarantine" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/quarantine" } } } },
+    { "if": { "properties": { "type": { "const": "edit_json" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/edit_json" } } } },
+    { "if": { "properties": { "type": { "const": "edit_toml" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/edit_toml" } } } },
+    { "if": { "properties": { "type": { "const": "remove_line" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/remove_line" } } } },
+    { "if": { "properties": { "type": { "const": "disable_mcp_server" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/disable_mcp_server" } } } },
+    { "if": { "properties": { "type": { "const": "checklist" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/checklist" } } } }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "chmod": {
+      "type": "object", "additionalProperties": false, "required": ["mode"],
+      "properties": { "mode": { "type": "string", "pattern": "^0[0-7]{3}$", "description": "8 進 3 桁。特殊ビット不可。world-writable 不可。現在の mode に無い権限は足せない（G-7）" } }
+    },
+    "quarantine": {
+      "type": "object", "additionalProperties": false, "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["file", "tree", "symlink"] },
+        "sha256": { "$ref": "#/$defs/sha256", "description": "kind=file: 内容の SHA-256" },
+        "tree_sha256": { "$ref": "#/$defs/sha256", "description": "kind=tree: ger-tree-v1" },
+        "link_target": { "type": "string", "minLength": 1, "description": "kind=symlink: readlink の値" },
+        "subject": { "type": "object", "additionalProperties": false, "required": ["name", "version"], "properties": { "name": { "type": "string", "minLength": 1 }, "version": { "type": ["string", "null"] } }, "description": "relation npm_pkg_dir / npm_installed: package.json の name / version" },
+        "record": { "const": true, "description": "relation pypi_record: RECORD のメンバーも移す" }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "file" } } }, "then": { "required": ["sha256"], "not": { "anyOf": [{ "required": ["tree_sha256"] }, { "required": ["link_target"] }, { "required": ["subject"] }, { "required": ["record"] }] } } },
+        { "if": { "properties": { "kind": { "const": "tree" } } }, "then": { "required": ["tree_sha256"], "not": { "anyOf": [{ "required": ["sha256"] }, { "required": ["link_target"] }] } } },
+        { "if": { "properties": { "kind": { "const": "symlink" } } }, "then": { "required": ["link_target"], "not": { "anyOf": [{ "required": ["sha256"] }, { "required": ["tree_sha256"] }, { "required": ["subject"] }, { "required": ["record"] }] } } }
+      ]
+    },
+    "json_op": {
+      "type": "object", "additionalProperties": false, "required": ["op", "pointer", "before_sha256"],
+      "properties": {
+        "op": { "enum": ["remove", "replace_const"] },
+        "pointer": { "type": "string", "pattern": "^/" },
+        "before_sha256": { "$ref": "#/$defs/sha256", "description": "その値の正規化 JSON の SHA-256" },
+        "const": { "type": "string", "description": "replace_const の値（GER の定数表 K にあるものだけ）" }
+      },
+      "if": { "properties": { "op": { "const": "replace_const" } } }, "then": { "required": ["const"] }, "else": { "not": { "required": ["const"] } }
+    },
+    "toml_op": {
+      "type": "object", "additionalProperties": false, "required": ["op", "key_path", "before_sha256"],
+      "properties": {
+        "op": { "const": "remove_table" },
+        "key_path": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "minLength": 1 } },
+        "before_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "edit_json": {
+      "type": "object", "additionalProperties": false, "required": ["format", "ops", "file_sha256", "expected_after_sha256"],
+      "properties": {
+        "format": { "enum": ["json", "jsonc"] },
+        "ops": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/json_op" } },
+        "file_sha256": { "$ref": "#/$defs/sha256" },
+        "expected_after_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "edit_toml": {
+      "type": "object", "additionalProperties": false, "required": ["ops", "file_sha256", "expected_after_sha256"],
+      "properties": {
+        "ops": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/toml_op" } },
+        "file_sha256": { "$ref": "#/$defs/sha256" },
+        "expected_after_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "remove_line": {
+      "type": "object", "additionalProperties": false, "required": ["lines", "file_sha256", "expected_after_sha256"],
+      "properties": {
+        "lines": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "object", "additionalProperties": false, "required": ["n", "sha256", "pattern_id"], "properties": { "n": { "type": "integer", "minimum": 1 }, "sha256": { "$ref": "#/$defs/sha256" }, "pattern_id": { "type": "string", "pattern": "^[a-z0-9_.]{1,64}$" } } } },
+        "file_sha256": { "$ref": "#/$defs/sha256" },
+        "expected_after_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "disable_mcp_server": {
+      "type": "object", "additionalProperties": false, "required": ["format", "ops", "file_sha256", "expected_after_sha256"],
+      "properties": {
+        "format": { "enum": ["json", "jsonc", "toml"] },
+        "ops": { "type": "array", "minItems": 1, "maxItems": 64 },
+        "file_sha256": { "$ref": "#/$defs/sha256" },
+        "expected_after_sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "if": { "properties": { "format": { "const": "toml" } } },
+      "then": { "properties": { "ops": { "items": { "$ref": "#/$defs/toml_op" } } } },
+      "else": { "properties": { "ops": { "items": { "allOf": [{ "$ref": "#/$defs/json_op" }, { "properties": { "op": { "const": "remove" } } }] } } } }
+    },
+    "checklist": {
+      "type": "object", "additionalProperties": false, "required": ["template", "steps"],
+      "properties": {
+        "template": { "type": "string", "pattern": "^CL-[A-Z0-9-]{1,32}$" },
+        "steps": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "object", "additionalProperties": false, "required": ["id", "text", "blocking"], "properties": { "id": { "type": "string", "pattern": "^s[0-9]{1,3}$" }, "text": { "type": "string", "minLength": 1, "maxLength": 2000 }, "blocking": { "type": "boolean" } } } },
+        "verify": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "enum": ["path_absent", "file_hash_changed", "self_attested"] } } }
+      }
+    }
+  }
+}
