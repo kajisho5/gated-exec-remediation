@@ -23,6 +23,8 @@ jobs:
       - name: python バージョン（3.11 以上）
         run: python3 -I -c 'import sys; print(sys.version); assert sys.version_info >= (3, 11)'
       - name: tests
+        # shell: bash は -eo pipefail で実行される（tee がテストの失敗を隠さない）
+        shell: bash
         run: |
           tests/run-tests.sh | tee "$RUNNER_TEMP/out.txt"
           # strace が使えず SKIP した場合は合格扱いにしない
