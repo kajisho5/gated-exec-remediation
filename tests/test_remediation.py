@@ -502,6 +502,73 @@ class TestGroupsAndGates(R):
                                                   "params": {"kind": "file", "sha256": fhash(other)}})])
         self.rejected(pl, "G-7", "group")
 
+    # --- findings 1.1: 1 つの対象に、finding_path も evidence の種類も違う finding がまとまる group ---
+    def _skill_group(self):
+        sk = self.root / "skills" / "signed"
+        sk.mkdir(parents=True)
+        (sk / "SKILL.md").write_text("x")
+        (sk / "skill.contract.json").write_text('{"name": "signed"}')
+        (sk / "run.sh").write_text("curl x")
+        con = sk / "skill.contract.json"
+        a = {"type": "quarantine", "target": str(sk), "relation": "skill_dir", "group": "g-skill", "params": {}}
+        items = [self.item(dict(a, finding_path=str(con), evidence={"kind": "file", "hash": fhash(con)})),
+                 self.item(dict(a, finding_path=str(sk), evidence={"kind": "tree", "hash": tree(sk)}))]
+        return sk, con, self.preview(self.plan(items))
+
+    def _npm_group(self):
+        nm = self.root / "node_modules" / "keyv"
+        nm.mkdir(parents=True)
+        (nm / "package.json").write_text('{"name": "keyv", "version": "6.0.0"}')
+        (nm / "index.js").write_text("evil")
+        lock = self.root / "package-lock.json"
+        lock.write_text('{"packages": {"node_modules/keyv": {"version": "6.0.0"}}}')
+        pj = nm / "package.json"
+        a = {"type": "quarantine", "target": str(nm), "group": "g-npm", "params": {}}
+        items = [self.item(dict(a, relation="npm_pkg_dir", finding_path=str(pj), evidence={"kind": "file", "hash": fhash(pj)})),
+                 self.item(dict(a, relation="npm_installed", finding_path=str(lock), evidence={"kind": "file", "hash": fhash(lock)}))]
+        return nm, lock, self.preview(self.plan(items))
+
+    def test_mixed_evidence_groups_pass(self):
+        sk, _con, p = self._skill_group()
+        nm, lock, p2 = self._npm_group()
+        p["items"] += p2["items"]
+        self.run_plan(self.rehash(p))
+        self.assertEqual([r["result"] for r in self.log()["results"]], ["applied"] * 4)
+        self.assertFalse(sk.exists() or nm.exists())
+        self.assertTrue(lock.exists())  # ロックファイルは隔離しない（ZET が checklist として残す）
+        self.restore()
+        self.assertTrue((sk / "run.sh").exists() and (nm / "index.js").exists())
+
+    def test_tampered_group_member_still_fails(self):
+        # 各 item の evidence は、それぞれの finding_path に対して導き直して照合する（group の他の item で代えない）
+        sk, con, p = self._skill_group()
+        con.write_text('{"name": "signed", "x": 1}')  # skill.contract.json が変わる（ツリーの pin でも止まる）
+        self.rejected(p, "G-7")
+        con.write_text('{"name": "signed"}')
+        (sk / "run.sh").write_text("curl y")  # ツリーの中身が変わる
+        self.rejected(p, "G-7")
+        (sk / "run.sh").write_text("curl x")
+        bad = copy.deepcopy(p)
+        bad["items"][0]["action"]["evidence"]["hash"] = "sha256:" + "0" * 64  # 計画の evidence を書き換える
+        self.rejected(self.rehash(bad), "G-7", "検知時")
+        nm, lock, p2 = self._npm_group()
+        lock.write_text('{"packages": {}}')  # 2 件目（ロックファイル）だけが変わる
+        self.rejected(p2, "G-7", "検知時")
+        # 同じ finding_path の item どうしは evidence.hash が一致すること（従来どおり）
+        lock.write_text('{"packages": {"node_modules/keyv": {"version": "6.0.0"}}}')
+        bad = copy.deepcopy(p2)
+        twin = copy.deepcopy(bad["items"][1])
+        twin["finding_id"] = fid(99)
+        twin["action"]["evidence"]["hash"] = "sha256:" + "1" * 64
+        bad["items"].append(twin)
+        self.rejected(self.rehash(bad), "G-7", "evidence.hash")
+        # group の 2 件目以降の relation も GER が確かめる（ロックファイルでない finding_path を npm_installed にしない）
+        bad = copy.deepcopy(p2)
+        other = self.root / "notes.txt"
+        other.write_text("x")
+        bad["items"][1]["action"].update(finding_path=str(other), evidence={"kind": "file", "hash": fhash(other)})
+        self.rejected(self.rehash(bad), "G-9", "npm_installed")
+
     def test_scope_protected_and_approvers(self):
         out = self.d / "outside.js"
         out.write_text("x")

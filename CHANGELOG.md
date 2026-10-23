@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### findings 1.1: group の evidence の照合（G-7）と relation の確認（G-9）
+
+- **原因**: G-7 が、同じ `action.group` のすべての item に内容に基づく evidence（file / tree / symlink）の `hash` の一致を求めていた。findings 1.1 では 1 つの対象に別のファイルの finding がまとまる（skill_dir: スキルのディレクトリの `tree` と `skill.contract.json` の `file`。npm: `node_modules/<name>/package.json` とロックファイル）ため、正しい計画を拒否していた（E2E の skillpact-signed-divergence と lockfile-installed）
+- **規則の変更**: evidence.hash の一致は同じ `finding_path` の item どうしだけに求める。`finding_path` が違う item の間では比べない。保証は変わらない: どの item の evidence も、それぞれの `finding_path`（ファイル・ツリー・シンボリックリンク）から GER が導き直して照合する（item ごと・全件）。別のファイルのハッシュの一致は何も保証しない
+- **G-9**: quarantine の group で、1 件目だけでなく全件の relation を字句上・ファイルシステム上で確かめる（finding_path の違う item が混ざるため。たとえばロックファイルでない finding_path の npm_installed を拒否する）
+- テスト: 種類の違う evidence の group（skill_dir、npm_pkg_dir + npm_installed）が通ること、group の一部の改ざん（ファイルの内容・ツリーの中身・計画の evidence・ロックファイル）が G-7 で止まること、同じ finding_path で hash が違えば拒否、2 件目以降の relation の誤りが G-9 で止まること
+- 設計 §10.3・§10.9 を更新
+- E2E: ZES 0.4.0（findings 1.1）と ZET（ロックファイルの finding を checklist にする修正）で 53/53
+
+
 ### 修復能力の拡張 Phase 1（設計 0.2。Q-1〜Q-6 を推奨どおり採用）
 
 - **新しい操作**: `quarantine`（ファイル・ツリー・シンボリックリンクを隔離ストアへ rename で移す。関係 self / npm_pkg_dir / npm_installed / pypi_record / ext_dir / skill_dir）、`edit_json`（JSON / JSONC。書式とコメントを保つ）、`edit_toml`（Phase 1 の範囲: 標準のテーブルヘッダの `[mcp_servers.<name>]`）、`remove_line`、`disable_mcp_server`（preset）、`checklist`（ファイルを変えない。結果は `pending_manual`）。`chmod` は従来どおり。ファイルを削除する操作は無い
