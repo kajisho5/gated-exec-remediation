@@ -28,6 +28,8 @@ def ensure_writable() -> None:
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
     if not os.access(d, os.W_OK):
         raise PermissionError(f"監査ログに書き込めません: {d}")
+    if log_path().is_symlink():
+        raise PermissionError(f"監査ログがシンボリックリンクです: {log_path()}")
 
 
 def _line_hash(line: bytes) -> str:
@@ -44,7 +46,7 @@ def _read_lines(p: Path) -> list[bytes]:
 def append(record: dict) -> dict:
     ensure_writable()
     p = log_path()
-    fd = os.open(p, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+    fd = os.open(p, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)  # シンボリックリンクは拒否
     with os.fdopen(fd, "r+b") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
@@ -53,8 +55,9 @@ def append(record: dict) -> dict:
             rec = {"skill": "ger", "version": VERSION, **record,
                    "prev_hash": _line_hash(lines[-1]) if lines else None}
             line = json.dumps(rec, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-            f.seek(0, os.SEEK_END)
-            f.write(line + b"\n")
+            end = f.seek(0, os.SEEK_END)
+            torn = end > 0 and os.pread(f.fileno(), 1, end - 1) != b"\n"  # 途中で切れた最終行に連結しない
+            f.write((b"\n" if torn else b"") + line + b"\n")
             f.flush()
             os.fsync(f.fileno())
         finally:

@@ -15,12 +15,20 @@ from unittest import mock
 
 from ger import audit, cli
 from ger.actions import chmod
-from ger.core import ROOT, plan_hash, validator
+from ger.core import ROOT, canonical, plan_hash, validator
 
 FIX = ROOT / "tests" / "fixtures"
 PLAN_ID = "11111111-2222-4333-8444-555555555555"
 NOW = "2026-10-22T12:00:00Z"
 FID = ["sha256:" + hashlib.sha256(str(i).encode()).hexdigest() for i in range(5)]
+
+
+def setUpModule():
+    os.environ["GER_ALLOW_NOW_OVERRIDE"] = "1"  # テストでは --now を使う
+
+
+def tearDownModule():
+    os.environ.pop("GER_ALLOW_NOW_OVERRIDE", None)
 
 
 def mode_of(p: Path) -> int:
@@ -73,6 +81,11 @@ class Base(unittest.TestCase):
                 "approval": {"plan_id": plan["plan_id"], "approved_by": list(approvers),
                              "approved_at": "2026-10-22T11:00:00Z", "approval_token": plan.get("plan_hash", "sha256:" + "0" * 64)}}
 
+    def write_raw(self, text, name="raw.json") -> str:
+        p = self.d / name
+        p.write_text(text, encoding="utf-8")
+        return str(p)
+
     def write(self, obj, name="in.json") -> str:
         p = self.d / name
         p.write_text(json.dumps(obj), encoding="utf-8")
@@ -88,7 +101,7 @@ class Base(unittest.TestCase):
         return code, err.getvalue()
 
     def ger(self, command, inp, operator="ops", now=NOW):
-        args = [command, self.write(inp, f"{command}.json"), "--operator", operator, "--now", now]
+        args = [command, self.write(inp, f"{command}.json"), "--operator", operator] + (["--now", now] if now else [])
         if command != "verify":
             args += ["-o", str(self.d / f"{command}-log.json")]
         return self.run_cli(*args)
@@ -194,6 +207,36 @@ class TestGates(Base):
         fifo = self.d / "fifo"; os.mkfifo(fifo)
         self.assertRejected(self.ger_input(plan=self.plan([fifo])), "G-7")
 
+    def test_g7_nul_byte_in_target(self):
+        self.assertRejected(self.ger_input(plan=self.plan([str(self.targets[0]) + "\x00x"])), "G-7")
+
+    def test_g7_hardlink_alias_rejected(self):
+        hl = self.d / "hardlink"; os.link(self.targets[0], hl)
+        code, err = self.ger("verify", self.ger_input(plan=self.plan([self.targets[0], hl])))
+        self.assertEqual(code, 3, err)
+        self.assertIn("G-7", err); self.assertIn("ハードリンク", err)
+
+    def test_trailing_newline_rejected_by_patterns(self):
+        # Python の $ は末尾の改行の直前にも一致する。"ops\n" で G-4（自己承認防止）を回避できないこと
+        self.assertRejected(self.ger_input(approvers=("ops\n",)), "G-1", operator="ops")
+        self.assertRejected(self.ger_input(approvers=("ops\n",)), "G-1", command="dry-run", operator="ops")
+        inp = self.ger_input(); inp["approval"]["plan_id"] += "\n"
+        self.assertFalse(validator("ger-input.schema.json").is_valid(inp))
+        self.assertEqual(self.ger("verify", self.ger_input(), operator="ops\n")[0], 64)
+        with self.assertRaises(chmod.ActionError):
+            chmod.parse_params({"mode": "0600\n"})
+
+    def test_g1_lone_surrogate_and_non_finite(self):
+        inp = json.dumps(self.ger_input())
+        for bad, why in ((inp.replace('"security-lead"', '"\\udc80"'), "サロゲート"), (inp[:-1] + ', "x": 1e400}', "有限でない")):
+            code, err = self.run_cli("verify", self.write_raw(bad), "--operator", "ops", "--now", NOW)
+            self.assertEqual(code, 3, err)
+            self.assertIn("G-1", err); self.assertIn(why, err)
+        recs = [json.loads(line) for line in audit.log_path().read_text().splitlines()]
+        self.assertEqual([(r["result"], r["gate_failed"]) for r in recs], [("rejected", ["G-1"])] * 2)
+        with self.assertRaises(ValueError):
+            canonical({"x": float("nan")})
+
     def test_g8_apply_requires_dry_run(self):
         self.assertRejected(self.ger_input(mode="apply"), "G-8", command="apply")
 
@@ -288,6 +331,80 @@ class TestExecution(Base):
         self.assertEqual(code, 4, err)
         self.assertEqual(mode_of(self.targets[0]), 0o644)
         self.assertEqual(mode_of(self.targets[1]), 0o644)
+
+    def test_unverifiable_after_apply_is_rollback_failed(self):
+        # fchmod の後に対象が差し替えられた（事後確認に失敗）場合、その item は戻せないため rollback_failed
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        real_fchmod, calls = os.fchmod, {"n": 0}
+
+        def fchmod_then_swap(fd, mode):
+            real_fchmod(fd, mode)
+            calls["n"] += 1
+            if calls["n"] == 2:  # key1 の適用直後に差し替える
+                os.rename(self.targets[1], self.d / "moved"); self.targets[1].write_text("evil"); os.chmod(self.targets[1], 0o644)
+        with mock.patch.object(chmod.os, "fchmod", fchmod_then_swap):
+            code, err = self.ger("apply", ap)
+        self.assertEqual(code, 5, err)
+        res = {r["finding_id"]: r for r in self.log("apply")["results"]}
+        self.assertEqual(res[FID[0]]["result"], "rolled_back")
+        self.assertEqual(mode_of(self.targets[0]), 0o644)
+        self.assertEqual(res[FID[1]]["result"], "failed")
+        self.assertIn("applied_unverified", res[FID[1]]["reason"])
+        self.assertEqual(mode_of(self.d / "moved"), 0o600)  # 実際に変更が残っている
+
+    def test_output_path_validated_before_changes(self):
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        n = len(audit.log_path().read_text().splitlines())
+        for out in ("/nonexistent/dir/x.json", str(self.d)):
+            code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", out)
+            self.assertEqual(code, 64, err)
+            self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "出力先が不正なのに変更されています")
+        self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
+
+    def test_output_write_failure(self):
+        inp = self.ger_input()
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        with mock.patch.object(cli, "write_atomic", side_effect=OSError("disk full")):
+            code, err = self.ger("dry-run", inp)
+            self.assertNotEqual(code, 0, err)
+            code, err = self.ger("apply", ap)
+            self.assertEqual(code, 3, err); self.assertIn("G-8", err)  # 書けなかった dry-run では apply できない
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        with mock.patch.object(cli, "write_atomic", side_effect=OSError("disk full")):
+            code, err = self.ger("apply", ap)
+        self.assertEqual(code, 5, err)
+        self.assertIn("手動で対応", err)
+        recs = [json.loads(line) for line in audit.log_path().read_text().splitlines()]
+        self.assertEqual([r["result"] for r in recs], ["error", "rejected", "ok", "rollback_failed"])
+        self.assertNotIn("output_hash", recs[0]); self.assertNotIn("output_hash", recs[-1])
+
+    def test_now_override_requires_env(self):
+        with mock.patch.dict(os.environ):
+            del os.environ["GER_ALLOW_NOW_OVERRIDE"]
+            for command in ("verify", "dry-run", "apply"):
+                code, err = self.ger(command, self.ger_input(mode="dry-run" if command == "verify" else command))
+                self.assertEqual(code, 64, err)
+                self.assertIn("テスト専用", err)
+            self.assertEqual(self.ger("verify", self.ger_input(), now=None)[0], 0)
+        self.assertFalse(audit.log_path().exists() and "dry-run" in audit.log_path().read_text())
+
+    def test_audit_torn_last_line_and_symlink(self):
+        audit.ensure_writable()
+        audit.log_path().write_bytes(b'{"skill":"ger","comm')  # クラッシュで途中まで書かれた最終行
+        audit.append({"command": "verify", "result": "ok"})
+        lines = audit.log_path().read_bytes().splitlines()
+        self.assertEqual(json.loads(lines[-1])["command"], "verify")
+        other = self.d / "elsewhere"; other.write_text("")
+        audit.log_path().unlink(); audit.log_path().symlink_to(other)
+        for check in (audit.ensure_writable, lambda: None):  # 事前確認と O_NOFOLLOW の両方で拒否する
+            with mock.patch.object(audit, "ensure_writable", check), self.assertRaises(OSError):
+                audit.append({"command": "verify", "result": "ok"})
+        self.assertEqual(self.ger("verify", self.ger_input())[0], 64)
+        self.assertEqual(other.read_text(), "")
 
     def test_audit_records_every_command(self):
         self.dry_then_apply(self.ger_input())
