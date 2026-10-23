@@ -19,7 +19,9 @@ from .jsonschema_lite import Validator
 VERSION = "0.1.0"
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMAS = ROOT / "schemas"
-RISKY_EFFECTS = ("exec", "network", "secrets")
+# 外部への副作用・コード実行を起こしうる SkillPact 0.8 の効果（G-6）。ZET（zet/core.py）と同じ集合。
+# read（機密ファイルの読み取りを含む。旧 secrets）と write（作業領域外への書き込みを含む。旧 persist）は単独では含めない
+RISKY_EFFECTS = ("exec", "network", "spend", "send")
 
 
 class Rejection:
