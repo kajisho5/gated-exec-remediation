@@ -10,6 +10,7 @@ import json
 import os
 import socket
 import stat
+import subprocess
 import tempfile
 import time
 import unittest
@@ -916,6 +917,25 @@ class TestRegressionsR3Fixes(Base):
         audit.log_path().write_text("\n".join(lines) + "\n")
         code, err = self.run_cli("verify-log", str(audit.log_path()))
         self.assertEqual(code, 3, err); self.assertIn("line 2: prev_hash 不一致", err)
+
+
+class TestLauncherNoSite(unittest.TestCase):
+    """bin/ger は site を読み込まない（-S）。site-packages の .pth は import site で実行されるため、
+    ツール自身の中でコードを実行させないには -I だけでは足りない。"""
+
+    def test_launcher_passes_I_and_S(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "argv")
+            shim = os.path.join(d, "python3")
+            with open(shim, "w") as fh:
+                fh.write('#!/bin/sh\nprintf "%s\\n" "$@" > "' + log + '"\n')
+            os.chmod(shim, 0o755)
+            env = dict(os.environ, PATH=d + os.pathsep + os.environ.get("PATH", ""))
+            subprocess.run([str(Path(__file__).resolve().parents[1] / "bin" / "ger"), "--help"],
+                           env=env, check=False, capture_output=True)
+            with open(log) as fh:
+                args = fh.read().split("\n")
+            self.assertEqual(args[:2], ["-I", "-S"])
 
 
 if __name__ == "__main__":
