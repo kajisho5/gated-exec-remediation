@@ -55,7 +55,7 @@ ZET が確定した修復計画を、人間の明示承認を受けたうえで�
 | G-3 | 承認 | `approval.plan_id != plan.plan_id`、`approval_token != plan_hash`、`approved_by` が空 | 承認なき実行禁止（§3） |
 | G-4 | 自己承認防止 | `approval.approved_by` に `--operator` が含まれる | 承認の連鎖 |
 | G-5 | 許可リスト | `action.type` が `allowed_actions` 外、または GER 未対応 | 許可リスト方式 |
-| G-6 | 二重承認 | `action.reversible == false` で `approval.approved_by` が 2 名未満。`action.skillpact_effects` に exec/network/secrets を含むのに、その操作が `allowed_actions` に明示されていない | `reversible: false`・SkillPact 不変条件 |
+| G-6 | 二重承認 | `action.reversible == false` で `approval.approved_by` が 2 名未満。`action.skillpact_effects` に exec/network/spend/send（SkillPact 0.8）を含むのに、その操作が `allowed_actions` に明示されていない | `reversible: false`・SkillPact 不変条件 |
 | G-7 | 対象の事前検証（全件） | 対象が存在しない／絶対パスでない／`..` を含む／シンボリックリンク（`lstat`）／計画外のパス／操作固有の検証失敗 | 対象の限定・部分適用禁止 |
 | G-8 | dry-run 記録（apply のみ） | 同じ `plan_hash` と `input_hash` の dry-run 成功記録が監査ログに無い、または `GER_DRYRUN_TTL`（既定 24 時間）より古い | dry-run を経ない apply 禁止 |
 

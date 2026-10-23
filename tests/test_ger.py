@@ -206,6 +206,17 @@ class TestGates(Base):
         p = self.plan(); del p["items"][0]["action"]["skillpact_effects"]; p["plan_hash"] = plan_hash(p)
         self.assertRejected(self.ger_input(plan=p), "G-6")
 
+    def test_g6_risky_effects_need_explicit_action(self):
+        # SkillPact 0.8: exec / network / spend / send を宣言したスキルへの操作は allowed_actions に明示が必要
+        for eff, risky in (("exec", True), ("network", True), ("spend", True), ("send", True), ("read", False), ("write", False)):
+            p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = [eff]; p["plan_hash"] = plan_hash(p)
+            code, err = self.ger("verify", self.ger_input(plan=p, allowed=()))
+            self.assertEqual(code, 3, err)
+            self.assertEqual(f"{eff} を宣言したスキルへの操作" in err, risky, eff)
+        p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = ["read", "write", "network", "exec", "spend", "send"]
+        p["plan_hash"] = plan_hash(p)
+        self.assertEqual(self.ger("verify", self.ger_input(plan=p))[0], 0)
+
     def test_g7_targets(self):
         link = self.d / "link"; link.symlink_to(self.targets[0])
         self.assertRejected(self.ger_input(plan=self.plan([link])), "G-7")
