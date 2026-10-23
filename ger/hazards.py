@@ -8,10 +8,11 @@ cannot be removed (removing it would loosen protection).
 """
 from __future__ import annotations
 
+import json
 import posixpath
 import re
 
-HAZARD_VERSION = "ger-hazards-2"
+HAZARD_VERSION = "ger-hazards-3"
 
 # --- Dangerous command detection ---------------------------------------------------------------
 # For agent hooks (hooks in .claude/settings.json).
@@ -20,6 +21,7 @@ DANGEROUS_CMD = re.compile(
 # For MCP server command + args. Copy of MCP_DANGER_RE from ZES §17 (zes-scan.sh; case-insensitive).
 #   If ZES reports HIGH but GER does not match, nothing is found to remove and automatic remediation fails (keep both aligned)
 _MCP_OPTS = r'(\s+-\S*)*\s+'
+# re.ASCII: like grep in the C locale, \s is ASCII whitespace only and case folding is ASCII only
 MCP_DANGER = re.compile(
     r'(^|[\s"/])(curl|wget)([\s"]|$)|base64'
     r'|(^|[\s"/])(ba|z|da|k|a|fi)?sh(\.exe)?' + _MCP_OPTS + r'-[a-z]*c[a-z]*(\s|$)'
@@ -29,29 +31,65 @@ MCP_DANGER = re.compile(
     r'|(^|[\s"/])(perl|ruby)[0-9.]*(\.exe)?' + _MCP_OPTS + r'-[a-z]*e(\s|$)'
     r'|(^|[\s"/])php[0-9.]*(\.exe)?' + _MCP_OPTS + r'-r(\s|$)'
     r'|(^|[\s"/])(osascript|lua[0-9.]*)' + _MCP_OPTS + r'-e(\s|$)'
-    r'|(^|[\s"/])(pwsh|powershell)(\.exe)?(\s+\S+)*\s+[-/](c|command|e|ec|enc|encodedcommand)(\s|$)'
     r'|(^|[\s"/])cmd(\.exe)?\s+/[ck](\s|$)',
-    re.IGNORECASE)
+    re.IGNORECASE | re.ASCII)
+# ZES branch (pwsh|powershell)(\.exe)?(\s+\S+)*\s+[-/](c|command|...)(\s|$), split in two: Python's backtracking takes
+#   quadratic time on that form ("pwsh " repeated). (\s+\S+)*\s+ is any text that starts and ends with whitespace, so the
+#   branch matches exactly when the first head followed by whitespace has a flag (with its leading whitespace) after it
+_PWSH_HEAD = re.compile(r'(^|[\s"/])(pwsh|powershell)(\.exe)?(?=\s)', re.IGNORECASE | re.ASCII)
+_PWSH_FLAG = re.compile(r'\s[-/](c|command|e|ec|enc|encodedcommand)(\s|$)', re.IGNORECASE | re.ASCII)
+
+
+def mcp_danger(line: str) -> bool:
+    """True if one line of an MCP command matches ZES's MCP_DANGER_RE."""
+    if MCP_DANGER.search(line):
+        return True
+    h = _PWSH_HEAD.search(line)
+    return h is not None and _PWSH_FLAG.search(line, h.end()) is not None
+
+
 # A hook runs a script in the working tree (node .claude/setup.mjs and so on)
 LOCAL_SCRIPT = re.compile(r'^\s*(node|deno|bun|python[0-9.]*|bash|sh|zsh|ruby|perl)\s+\.{0,2}/?[\w.@-]+(/[\w.@-]+)*\s*$')
 
 
-def mcp_cmdline(server) -> str | None:
-    """Builds command + args from an MCP server definition (dict) in the same form as ZES. None if there is no command."""
+def _jq_tostring(v) -> str:
+    """jq's tostring: a string as it is, anything else as compact JSON."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return str(v)
+    return json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+
+
+_TOML_CTRL = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def mcp_cmdline(server, toml: bool = False) -> str | None:
+    """Builds command + args from an MCP server definition (dict) in the same form as ZES. None if there is no command.
+
+    JSON (ZES: jq): command and every arg through tostring, args that is not an array through tostring, null args as [].
+    bash `read` drops NUL characters, so they are removed here too.
+    TOML (ZES: codex_toml_mcp_commands): only a string command and string args count; control characters become spaces."""
     if not isinstance(server, dict) or "command" not in server:
         return None
-    args = server.get("args", [])
-    if isinstance(args, list):
-        a = " ".join(str(x) for x in args)
-    else:
-        a = str(args)
-    return f"{server['command']} {a}".strip()
+    cmd, args = server["command"], server.get("args")
+    if toml:
+        if not isinstance(cmd, str) or cmd == "":
+            return None
+        if isinstance(args, str):
+            args = [args]
+        a = " ".join(x for x in (args if isinstance(args, list) else []) if isinstance(x, str))
+        return _TOML_CTRL.sub(" ", f"{cmd} {a}" if a else cmd)
+    if args is None or args is False:
+        args = []
+    a = " ".join(_jq_tostring(x) for x in args) if isinstance(args, list) else _jq_tostring(args)
+    return f"{_jq_tostring(cmd)} {a}".replace("\0", "")
 
 
-def dangerous_server(server) -> bool:
-    c = mcp_cmdline(server)
-    # Like ZES, match each line of the command split at newlines
-    return c is not None and any(MCP_DANGER.search(line) for line in c.split("\n"))
+def dangerous_server(server, toml: bool = False) -> bool:
+    c = mcp_cmdline(server, toml)
+    # Like ZES, match each line of the command split at newlines (TOML has none left)
+    return c is not None and any(mcp_danger(line) for line in c.split("\n"))
 
 
 def _commands(obj):

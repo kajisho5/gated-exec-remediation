@@ -54,7 +54,7 @@ def compute(path: str, data: bytes, ops: list) -> bytes:
         raise ActionError(str(e)) from None
     for o in ops:
         if hazards.toml_hazard(path, o["key_path"]) is None:
-            raise ActionError(f"table {'.'.join(o['key_path'])} does not match GER's hazard table (H) (T-1)")
+            raise ActionError(f"table {'.'.join(o['key_path'])} does not match GER's hazard table (H) (T-1)", gate="G-10")
         v = _value(doc, o["key_path"])
         if not isinstance(v, dict):
             raise ActionError(f"{'.'.join(o['key_path'])} is not a table")
@@ -66,7 +66,7 @@ def compute(path: str, data: bytes, ops: list) -> bytes:
     except tomledit.TomlEditError as e:
         raise ActionError(str(e)) from None
     if canonical(tomledit.plain(after)) != canonical(tomledit.plain(expected)):
-        raise ActionError("the re-parsed result does not equal \"before - removed tables\" (T-3)")
+        raise ActionError("the re-parsed result does not equal \"before - removed tables\" (T-3)", gate="G-10")
     return new.encode("utf-8")
 
 
@@ -90,7 +90,7 @@ def preview_compute(ctx, items):
         p = it.action["params"]
         if "select" in p:
             for name, v in (doc.get("mcp_servers") or {}).items():
-                if isinstance(v, dict) and hz.dangerous_server(v):
+                if isinstance(v, dict) and hz.dangerous_server(v, toml=True):
                     kps.append(["mcp_servers", name])
         else:
             kps += [list(o["key_path"]) for o in p.get("ops", [])]

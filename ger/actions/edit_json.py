@@ -51,11 +51,11 @@ def check_ops(path: str, root, ops: list, allowed_h=None) -> None:
         val = jsonedit.to_python(node)
         hid = hazards.json_hazard(path, o["pointer"], val, o["op"])
         if hid is None or (allowed_h is not None and hid not in allowed_h):
-            raise ActionError(f"pointer {o['pointer']} does not match GER's hazard table (H); it cannot be removed (T-1)")
+            raise ActionError(f"pointer {o['pointer']} does not match GER's hazard table (H); it cannot be removed (T-1)", gate="G-10")
         if sha256(canonical(val)) != o["before_sha256"]:
             raise ActionError(f"the value at pointer {o['pointer']} changed since preview (does not match before_sha256)")
         if o["op"] == "replace_const" and o.get("const") not in hazards.JSON_K.get(hid, ()):
-            raise ActionError(f"a replace_const value must be in the constant table (K) (T-2): {hid}")
+            raise ActionError(f"a replace_const value must be in the constant table (K) (T-2): {hid}", gate="G-10")
 
 
 def compute(path: str, data: bytes, fmt: str, ops: list, allowed_h=None) -> bytes:
@@ -69,9 +69,9 @@ def compute(path: str, data: bytes, fmt: str, ops: list, allowed_h=None) -> byte
         new, expected = jsonedit.apply_ops(text, fmt, ops)
         after = jsonedit.reparse(new, fmt)
     except (jsonedit.JsonEditError, ValueError) as e:
-        raise ActionError(f"cannot parse the result (T-3): {e}") from None
+        raise ActionError(f"cannot parse the result (T-3): {e}", gate="G-10") from None
     if canonical(after) != canonical(expected):
-        raise ActionError("the re-parsed result does not equal \"before - removed units\" (T-3)")
+        raise ActionError("the re-parsed result does not equal \"before - removed units\" (T-3)", gate="G-10")
     return new.encode("utf-8")
 
 

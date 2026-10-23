@@ -7,7 +7,7 @@
 GER is now English-first, following ZES 0.5.0. Every message a person reads is English: gate rejection reasons, action errors, `ger preview` summaries and reports, CLI output and help, remediation-log `reason` texts and the test harness output. Behaviour does not change apart from the language of these strings.
 
 - **Unchanged**: gate and rule codes (G-1 to G-10, I-*, T-*, Q-*, CL-*), exit codes, JSON keys, enum values, schemas (only GER-owned schema `description` texts are English), `plan_hash` / `input_hash` / approval tokens, the audit log, journal and quarantine manifest formats, and `HAZARD_VERSION` (`ger-hazards-2`).
-- Messages that start with or contain a `T-` code are still reported as G-10; the check now looks for the half-width `(T-` because the full-width parenthesis is gone.
+- T-* violations are still reported as G-10 (see the next entry for how this is decided now).
 - Audit log records written by earlier versions may hold a Japanese `error` text (an `-o` clash). Nothing reads that text back, and `ger verify-log` checks the hash chain over the raw bytes, so old logs still verify and old dry-run records still count.
 - Plans finalized by the current ZET are accepted as before. GER does not compare checklist step texts, followup templates or notes written by ZET; they only enter `plan_hash`, which GER recomputes over the plan as given. The vendored ZET files (`schemas/vendor/remediation-plan.schema.json`, `ger/jsonschema_lite.py`) are re-vendored from ZET's English-first versions (only comments, docstrings and schema descriptions changed; `schemas/vendor/VENDOR.json` pins the new commits and hashes). The ZET plan fixtures (`tests/fixtures/zet-final-plan*.json`) stay as ZET produced them, Japanese step texts included, and still validate.
 - Docs: README (already bilingual), SECURITY, brand README and `docs/design/design.md` are English, with Japanese as `*.ja.md` (`docs/design/flow.ja.svg` for the diagram). SKILL.md is English and tells agents to answer in the user's language. Code comments are English.
@@ -18,11 +18,23 @@ GER is now English-first, following ZES 0.5.0. Every message a person reads is E
 ZES 0.5.0 に合わせて GER を英語優先にしました。人が読む文（ゲートの拒否理由、操作のエラー、`ger preview` の要約とレポート、CLI の出力とヘルプ、remediation-log の `reason`、テストの出力）はすべて英語です。動作は、これらの文の言語以外は変わりません。
 
 - **変わらないもの**: ゲート・規則のコード（G-1〜G-10、I-*、T-*、Q-*、CL-*）、終了コード、JSON のキー、enum の値、スキーマ（英語にしたのは GER 所有のスキーマの `description` だけ）、`plan_hash` / `input_hash` / 承認トークン、監査ログ・ジャーナル・隔離マニフェストの形式、`HAZARD_VERSION`（`ger-hazards-2`）
-- `T-` のコードを含むメッセージは引き続き G-10 として報告します（全角の括弧が無くなったため、判定は半角の `(T-` で行います）
+- T-* の違反は引き続き G-10 として報告します（いまの判定方法は次の項目を参照）
 - 以前の版が書いた監査ログの記録には日本語の `error`（`-o` の衝突）が入っていることがあります。この文を読み返す処理は無く、`ger verify-log` は生のバイト列でハッシュチェーンを確かめるため、古いログもそのまま検証に通り、古い dry-run 記録もそのまま数えます
 - 現在の ZET が確定した計画はこれまでどおり受け付けます。GER は ZET が書いたチェックリストの手順・followup のテンプレート・注記の文言を比べません（`plan_hash` に入るだけで、GER は渡された計画のまま計算し直します）。ZET から写したファイル（`schemas/vendor/remediation-plan.schema.json`、`ger/jsonschema_lite.py`）は、英語優先にした ZET の版から写し直しました（変わったのはコメント・docstring・スキーマの説明だけ。`schemas/vendor/VENDOR.json` に新しいコミットとハッシュを固定）。ZET の計画のフィクスチャ（`tests/fixtures/zet-final-plan*.json`）は ZET が出力したまま（日本語の手順を含む）で、引き続き検証に通ります
 - 文書: README（もともと英語と日本語）、SECURITY、brand の README、`docs/design/design.md` は英語を正とし、日本語版を `*.ja.md` に置きました（図は `docs/design/flow.ja.svg`）。SKILL.md は英語です（利用者の言語で答えるよう指示）。コードのコメントは英語にしました
 - この CHANGELOG はこの項目から英語と日本語の両方で書きます。以前の項目は日本語のままです
+
+### Round 4 fixes (definition T table `ger-hazards-3`)
+
+- **MCP_DANGER took quadratic time** on its pwsh / powershell branch (`(\s+\S+)*\s+` before the flag): an `.mcp.json` with `"pwsh"` repeated in `args` (64 KB) kept `ger preview` busy for 36 s, and files up to 1 MB are read. The branch is now two linear searches with the same result (the first `pwsh` / `powershell` followed by whitespace, then the flag anywhere after it).
+- **GER and ZES disagreed on some MCP servers.** `\s` and case-insensitive matching were Unicode-aware in Python (NBSP, U+3000, `ſ`, Kelvin sign), so GER selected servers ZES did not flag; they are ASCII-only now, like grep in the C locale. Non-string `command` / `args` values were joined with Python `str()` and NUL characters were kept, so GER found nothing to remove where ZES reported HIGH; the command line is now built like ZES (jq `tostring`, NUL dropped). In `.codex/config.toml`, only string `command` / `args` count and control characters become spaces, as in ZES's TOML reader.
+- **Gate codes came from message text.** Any rejection whose text contained `(T-` was reported as G-10, including G-7 rejections that quote a server name or RECORD path from the scanned content (`evil (T-1)`). T-* violations now carry the gate where they are raised. G-6 and G-9 rejections were recorded as `G-6:` / `G-9:` (with the colon) in the report and the audit log's `gate_failed`; they are `G-6` / `G-9` now. Plans were refused either way; only the reported code was wrong.
+
+### 日本語（round 4 の修正）
+
+- **MCP_DANGER が二次時間かかっていた**（pwsh / powershell の分岐。フラグの前の `(\s+\S+)*\s+`）。`args` に `"pwsh"` を並べた 64 KB の `.mcp.json` で `ger preview` が 36 秒止まった（読むのは 1 MB まで）。同じ結果になる 2 回の線形な検索に分けた（空白が続く最初の `pwsh` / `powershell` と、その後ろのフラグ）
+- **一部の MCP サーバーで GER と ZES の判定が食い違っていた。** Python では `\s` と大文字小文字の同一視が Unicode に及び（NBSP、U+3000、`ſ`、ケルビン記号）、ZES が検出しないサーバーを GER が選んでいた。C ロケールの grep と同じく ASCII だけにした。文字列でない `command` / `args` を Python の `str()` でつないでいたことと NUL を残していたことで、ZES が HIGH とするのに GER が取り除く対象を見つけられなかった。ZES と同じ形（jq の `tostring`、NUL は落とす）で組み立てる。`.codex/config.toml` では ZES の TOML 読み取りと同じく文字列の `command` / `args` だけを使い、制御文字は空白にする
+- **ゲートのコードをメッセージの文から決めていた。** 文に `(T-` を含む拒否はすべて G-10 になり、スキャン対象から来たサーバー名や RECORD のパス（`evil (T-1)`）を引用する G-7 の拒否も G-10 と報告していた。T-* の違反は発生箇所でゲートを持たせる。G-6 / G-9 の拒否はレポートと監査ログの `gate_failed` にコロン付きの `G-6:` / `G-9:` で記録されていたのを `G-6` / `G-9` にした。どちらの場合も計画は拒否されており、誤っていたのは報告するコードだけ
 
 ### MCP の危険判定を ZES §17 に揃える（定義 T の表 `ger-hazards-2`）
 

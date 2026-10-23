@@ -18,11 +18,13 @@ from ..fsutil import FsError, Resolved, ident_of
 
 
 class ActionError(Exception):
-    """applied=True means "the change may already have been made and could not be verified" (rollback not possible)."""
+    """applied=True means "the change may already have been made and could not be verified" (rollback not possible).
+    gate names the gate of a pre-validation failure (set for T-* violations, "G-10"); the message text never decides it."""
 
-    def __init__(self, message: str, applied: bool = False):
+    def __init__(self, message: str, applied: bool = False, gate: str | None = None):
         super().__init__(message)
         self.applied = applied
+        self.gate = gate
 
 
 @dataclass
