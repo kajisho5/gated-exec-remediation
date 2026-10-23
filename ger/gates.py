@@ -579,10 +579,12 @@ def _prepare_all(plan: dict, items: list[dict], approvers: set, pool: fsutil.FdP
             rej.append(Rejection("G-7", str(e), fid))
         except (ActionError, OSError, ValueError) as e:  # ValueError: a NUL character in the path and so on
             msg = str(e)
-            gate = msg[:4] if msg.startswith(("G-6:", "G-9:")) else "G-7"
-            if msg.startswith(("T-", "Q-6")) or "(T-" in msg:
+            # Only a fixed prefix or the gate set where the error is raised decides the gate: the message can contain
+            #   names from the scanned content (a server name, a RECORD path)
+            gate = msg[:3] if msg.startswith(("G-6:", "G-9:")) else "G-7"
+            if getattr(e, "gate", None) == "G-10" or msg.startswith("Q-6:"):
                 gate = "G-10"
-            rej.append(Rejection(gate, msg[5:] if gate in ("G-6", "G-9") and msg[:4] == gate else msg, fid))
+            rej.append(Rejection(gate, msg[5:] if gate in ("G-6", "G-9") else msg, fid))
     if len(root_kinds) > 1:
         rej.append(Rejection("G-9", "the plan mixes targets that require root and targets that do not. Split the plan"))
     steps.sort(key=lambda s: (s.order, s.items[0].index))

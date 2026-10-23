@@ -412,6 +412,43 @@ class TestEdits(R):
         self.run_plan(p)
         self.assertEqual(json.loads(m.read_text()), {"mcpServers": {"ok": {"command": "node", "args": ["server.js"]}}})
 
+    def test_mcp_danger_zes_edges(self):
+        # Round 4: linear time on the pwsh branch, ASCII-only \s and case folding (grep in the C locale),
+        #   jq tostring for non-string values, NUL dropped like bash read, TOML control characters as spaces
+        import time
+        from ger import hazards
+        t0 = time.time()
+        self.assertFalse(hazards.mcp_danger("pwsh " * 40000))
+        self.assertFalse(hazards.mcp_danger("powershell.exe x " * 20000))
+        self.assertLess(time.time() - t0, 2)
+        for line in ("pwsh -c x", "pwsh.exe -NoProfile /Command x", "x/pwsh a b -enc AA", 'a "powershell\t-e', "pwsh  -c"):
+            self.assertTrue(hazards.mcp_danger(line), line)
+        for line in ("pwsh", "pwshx -c x", "pwsh -cx", "xpwsh -c", "pwsh.exefoo -c", "pwsh -NoProfile"):
+            self.assertFalse(hazards.mcp_danger(line), line)
+        for c, a in (("/opt/curl\u00a0w", []), ("python", ["-\u212ac"]), ("ba\u017fh", ["-c", "x"]), ("sh\u3000-c", [])):
+            self.assertFalse(hazards.dangerous_server({"command": c, "args": a}), (c, a))
+        for c, a in (("x", [{"a": "curl"}]), (["curl"], []), ("c\0url", ["https://x.invalid"]), ("x", {"curl": 1})):
+            self.assertTrue(hazards.dangerous_server({"command": c, "args": a}), (c, a))
+        self.assertFalse(hazards.dangerous_server({"command": "x", "args": None}))
+        for c, a in (("bash", ["\n-c", "touch x"]), ("sh\0-c", ["touch x"]), ("bash", "-c x")):
+            self.assertTrue(hazards.dangerous_server({"command": c, "args": a}, toml=True), (c, a))
+        for c, a in ((["curl"], []), ("x", [1, "curl"][:1]), ("", ["curl"])):
+            self.assertFalse(hazards.dangerous_server({"command": c, "args": a}, toml=True), (c, a))
+
+    def test_gate_code_not_from_message_text(self):
+        # A server name with "(T-" in it does not turn a G-7 rejection into G-10
+        m = self.root / ".mcp.json"
+        m.write_text(json.dumps({"mcpServers": {"evil (T-1)": {"command": "curl", "args": ["https://x.invalid"]}}}))
+        p = self.preview(self.plan([self.item({"type": "disable_mcp_server", "target": str(m), "params": {"select": "mcp.server"}})]))
+        p["items"][0]["action"]["params"]["ops"][0]["before_sha256"] = "sha256:" + "0" * 64
+        e = self.rejected(self.rehash(p), "G-7")
+        self.assertNotIn("G-10", e)
+        # G-9 is recorded as "G-9", not "G-9:"
+        f = self.d / "outside.js"
+        f.write_text("x")
+        e = self.rejected(self.plan([self.item({"type": "quarantine", "target": str(f), "params": {"kind": "file", "sha256": fhash(f)}})]), "G-9")
+        self.assertNotIn("G-9:", e)
+
     def test_tightening_only_rejections(self):
         s = self.root / ".claude" / "settings.json"
         s.parent.mkdir()

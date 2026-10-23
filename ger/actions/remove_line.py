@@ -168,11 +168,11 @@ def compute(path: str, data: bytes, lines: list) -> bytes:
             raise ActionError(f"line {n} not found")
         fpred, rx, _kind = hazards.LINE_H[pid]
         if not fpred(path):
-            raise ActionError(f"pattern {pid} cannot be used for this kind of file (T-1)")
+            raise ActionError(f"pattern {pid} cannot be used for this kind of file (T-1)", gate="G-10")
         if sha256(parts[n - 1][0]) != ln["sha256"]:
             raise ActionError(f"the content of line {n} changed since preview (does not match sha256)")
         if not rx.fullmatch(contents[n - 1]):
-            raise ActionError(f"line {n} does not match hazard pattern {pid}; it cannot be removed (T-1)")
+            raise ActionError(f"line {n} does not match hazard pattern {pid}; it cannot be removed (T-1)", gate="G-10")
         if not _contexts(path, contents, pid)[n - 1]:
             raise ActionError(f"line {n} cannot be removed: it is inside a continued line, a here-document or a block (or this cannot be determined)")
     drop = set(nums)
@@ -191,7 +191,7 @@ def compute(path: str, data: bytes, lines: list) -> bytes:
     if 1 in drop and data.startswith(BOM):
         alt = BOM + alt
     if alt != new:
-        raise ActionError("content other than the removed lines would change (T-3)")
+        raise ActionError("content other than the removed lines would change (T-3)", gate="G-10")
     return new
 
 

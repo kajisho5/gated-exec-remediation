@@ -222,11 +222,11 @@ Files added in Phase 1: `ger/fsutil.py` (fd-based target resolution, tree hash),
 
 Approvers approve "the exact bytes after the change" (`expected_after_sha256`) and "the exact hash of what is quarantined". apply stops if its recomputed result differs from these.
 
-### 10.2 Tables of definition T (narrowing only) (`ger/hazards.py`, version `ger-hazards-2`)
+### 10.2 Tables of definition T (narrowing only) (`ger/hazards.py`, version `ger-hazards-3`)
 
 | Operation | H (units that may be removed, per file type) | K (constants that may be added) |
 |---|---|---|
-| edit_json / disable_mcp_server | `mcp.server`: `/mcpServers/<name>`, `/servers/<name>`, `/projects/<p>/mcpServers/<name>` (value is an object) in MCP settings (`.mcp.json` / `mcp.json` / `mcp_config.json` / `.claude.json` / `claude_desktop_config.json`). Automatic selection in preview takes only servers matching `MCP_DANGER`, a copy of `MCP_DANGER_RE` from ZES §17 (case-insensitive; each line of the command split at newlines) (ger-hazards-2. -1 covered only shell -c, node -e, python -c and powershell -enc, so it could not automatically remove ZES round 3's `cmd /c`, `deno eval`, `node --eval`, `bash --norc -c`, `-xc`, `perl -e`, `ruby -e`, `pwsh -Command`) | — |
+| edit_json / disable_mcp_server | `mcp.server`: `/mcpServers/<name>`, `/servers/<name>`, `/projects/<p>/mcpServers/<name>` (value is an object) in MCP settings (`.mcp.json` / `mcp.json` / `mcp_config.json` / `.claude.json` / `claude_desktop_config.json`). Automatic selection in preview takes only servers matching `MCP_DANGER`, a copy of `MCP_DANGER_RE` from ZES §17 (case-insensitive; each line of the command split at newlines) (ger-hazards-2. -1 covered only shell -c, node -e, python -c and powershell -enc, so it could not automatically remove ZES round 3's `cmd /c`, `deno eval`, `node --eval`, `bash --norc -c`, `-xc`, `perl -e`, `ruby -e`, `pwsh -Command`. ger-hazards-3: ASCII-only `\s` and case folding like grep in the C locale, the pwsh branch in linear time, command / args built like ZES (jq `tostring` for non-strings, NUL dropped; in TOML only strings, control characters as spaces)) | — |
 | edit_json | `npm.lifecycle`: `/scripts/(preinstall\|install\|postinstall\|prepare\|…)` in `package.json` | — |
 | edit_json | `claude.hook`: `/hooks/<Event>/<i>` (and `/hooks/<Event>/<i>/hooks/<j>`) in `.claude/settings(.local).json` | — |
 | edit_json | `vscode.task_run_on`: `/tasks/<i>/runOptions/runOn` in `.vscode/tasks.json` (value `folderOpen`) | `"default"` |

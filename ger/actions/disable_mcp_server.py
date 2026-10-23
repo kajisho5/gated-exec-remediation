@@ -35,7 +35,7 @@ def _compute(fmt):
         if fmt == "toml":
             for o in ops:
                 if hazards.toml_hazard(path, o["key_path"]) != "mcp.server.toml":
-                    raise ActionError("disable_mcp_server can remove only [mcp_servers.<name>] (T-1)")
+                    raise ActionError("disable_mcp_server can remove only [mcp_servers.<name>] (T-1)", gate="G-10")
             return edit_toml.compute(path, data, ops)
         return edit_json.compute(path, data, fmt, ops, allowed_h=hazards.MCP_PRESET)
     return f

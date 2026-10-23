@@ -222,11 +222,11 @@ Phase 1 で追加したファイル: `ger/fsutil.py`（fd でたどる対象の�
 
 承認者は「変更後の正確なバイト列」（`expected_after_sha256`）と「隔離するものの正確なハッシュ」を承認することになる。apply は計算し直した結果がこれと違えば止まる。
 
-### 10.2 定義 T（絞るだけ）の表（`ger/hazards.py`、版 `ger-hazards-2`）
+### 10.2 定義 T（絞るだけ）の表（`ger/hazards.py`、版 `ger-hazards-3`）
 
 | 操作 | H（取り除いてよい単位。ファイルの種類ごと） | K（足してよい定数） |
 |---|---|---|
-| edit_json / disable_mcp_server | `mcp.server`: MCP 設定（`.mcp.json` / `mcp.json` / `mcp_config.json` / `.claude.json` / `claude_desktop_config.json`）の `/mcpServers/<name>`・`/servers/<name>`・`/projects/<p>/mcpServers/<name>`（値は object）。preview の自動選択は ZES §17 の `MCP_DANGER_RE` を写した `MCP_DANGER`（大文字小文字を区別しない。command の改行で分けた行ごと）に一致するサーバーだけ（ger-hazards-2。-1 はシェル -c・node -e・python -c・powershell -enc だけで、ZES round 3 の `cmd /c`・`deno eval`・`node --eval`・`bash --norc -c`・`-xc`・`perl -e`・`ruby -e`・`pwsh -Command` を自動で取り除けなかった） | — |
+| edit_json / disable_mcp_server | `mcp.server`: MCP 設定（`.mcp.json` / `mcp.json` / `mcp_config.json` / `.claude.json` / `claude_desktop_config.json`）の `/mcpServers/<name>`・`/servers/<name>`・`/projects/<p>/mcpServers/<name>`（値は object）。preview の自動選択は ZES §17 の `MCP_DANGER_RE` を写した `MCP_DANGER`（大文字小文字を区別しない。command の改行で分けた行ごと）に一致するサーバーだけ（ger-hazards-2。-1 はシェル -c・node -e・python -c・powershell -enc だけで、ZES round 3 の `cmd /c`・`deno eval`・`node --eval`・`bash --norc -c`・`-xc`・`perl -e`・`ruby -e`・`pwsh -Command` を自動で取り除けなかった。ger-hazards-3: C ロケールの grep と同じく `\s` と大文字小文字の同一視を ASCII だけにし、pwsh の分岐を線形時間にし、command / args を ZES と同じ形で組み立てる（文字列以外は jq の `tostring`、NUL は落とす。TOML は文字列だけ、制御文字は空白）） | — |
 | edit_json | `npm.lifecycle`: `package.json` の `/scripts/(preinstall\|install\|postinstall\|prepare\|…)` | — |
 | edit_json | `claude.hook`: `.claude/settings(.local).json` の `/hooks/<Event>/<i>`（と `/hooks/<Event>/<i>/hooks/<j>`） | — |
 | edit_json | `vscode.task_run_on`: `.vscode/tasks.json` の `/tasks/<i>/runOptions/runOn`（値が `folderOpen`） | `"default"` |
