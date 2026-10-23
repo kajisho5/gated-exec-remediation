@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import io
 import json
@@ -13,9 +14,9 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from ger import audit, cli
+from ger import audit, cli, executor, gates
 from ger.actions import chmod
-from ger.core import ROOT, canonical, plan_hash, validator
+from ger.core import ROOT, canonical, input_hash, now_utc, plan_hash, validator
 
 FIX = ROOT / "tests" / "fixtures"
 PLAN_ID = "11111111-2222-4333-8444-555555555555"
@@ -180,6 +181,16 @@ class TestGates(Base):
     def test_g4_self_approval(self):
         self.assertRejected(self.ger_input(approvers=("ops",)), "G-4", operator="ops")
 
+    def test_names_compared_case_insensitively(self):
+        self.assertRejected(self.ger_input(approvers=("ops",)), "G-4", operator="OPS")
+        self.assertRejected(self.ger_input(approvers=("Ops",)), "G-4", operator="ops")
+        p = self.plan()
+        p["items"][0]["action"]["reversible"] = False
+        p["plan_hash"] = plan_hash(p)
+        code, err = self.ger("verify", self.ger_input(plan=p, approvers=("alice", "ALICE")))
+        self.assertEqual(code, 3, err)
+        self.assertIn("承認者 2 名以上", err)
+
     def test_g5_allowlist_and_unsupported(self):
         self.assertRejected(self.ger_input(allowed=()), "G-5")
         p = self.plan()
@@ -206,6 +217,26 @@ class TestGates(Base):
         self.assertRejected(self.ger_input(plan=p), "G-7")
         fifo = self.d / "fifo"; os.mkfifo(fifo)
         self.assertRejected(self.ger_input(plan=self.plan([fifo])), "G-7")
+
+    def test_g1_duplicate_finding_id(self):
+        p = self.plan(); p["items"][1]["finding_id"] = FID[0]; p["plan_hash"] = plan_hash(p)
+        code, err = self.ger("verify", self.ger_input(plan=p))
+        self.assertEqual(code, 3, err)
+        self.assertIn("G-1", err); self.assertIn("finding_id が重複", err)
+
+    def test_g1_invalid_calendar_timestamps(self):
+        inp = self.ger_input(); inp["approval"]["approved_at"] = "2026-02-30T11:00:00Z"
+        self.assertRejected(inp, "G-1")
+        p = self.plan(created_at="2026-10-22T25:00:00Z")
+        code, err = self.ger("verify", self.ger_input(plan=p))
+        self.assertEqual(code, 3, err)
+        self.assertIn("plan.created_at が実在しない日時です", err)
+
+    def test_g8_unparseable_dry_run_record_is_ignored(self):
+        inp = self.ger_input(mode="apply")
+        audit.append({"command": "dry-run", "result": "ok", "plan_hash": inp["plan"]["plan_hash"],
+                      "input_hash": input_hash(inp), "finished_at": "2026-02-30T00:00:00Z"})
+        self.assertRejected(inp, "G-8", command="apply")
 
     def test_g7_nul_byte_in_target(self):
         self.assertRejected(self.ger_input(plan=self.plan([str(self.targets[0]) + "\x00x"])), "G-7")
@@ -236,6 +267,22 @@ class TestGates(Base):
         self.assertEqual([(r["result"], r["gate_failed"]) for r in recs], [("rejected", ["G-1"])] * 2)
         with self.assertRaises(ValueError):
             canonical({"x": float("nan")})
+
+    def test_g1_duplicate_keys_rejected(self):
+        inp = json.dumps(self.ger_input())
+        dup = inp.replace('"approved_by": ["security-lead"]', '"approved_by": ["ops"], "approved_by": ["security-lead"]')
+        self.assertNotEqual(dup, inp)
+        code, err = self.run_cli("verify", self.write_raw(dup), "--operator", "ops", "--now", NOW)
+        self.assertEqual(code, 3, err)
+        self.assertIn("G-1", err); self.assertIn("重複", err)
+
+    def test_g1_deep_nesting_rejected(self):
+        inp = json.dumps(self.ger_input())
+        for depth in (100, 200000):  # 200000 は json.loads 自体が RecursionError になる深さ
+            deep = inp[:-1] + ', "x": ' + "[" * depth + "]" * depth + "}"
+            code, err = self.run_cli("verify", self.write_raw(deep), "--operator", "ops", "--now", NOW)
+            self.assertEqual(code, 3, err)
+            self.assertIn("G-1", err); self.assertIn("入れ子が深すぎます", err)
 
     def test_g8_apply_requires_dry_run(self):
         self.assertRejected(self.ger_input(mode="apply"), "G-8", command="apply")
@@ -315,6 +362,26 @@ class TestExecution(Base):
         self.assertEqual([results[f] for f in FID[:3]], ["rolled_back", "rolled_back", "failed"])
         self.assertEqual(self.log("apply")["status"], "error")
 
+    def test_rollback_tracks_items_by_position_not_finding_id(self):
+        # 同じ finding_id の item があっても、ロールバック結果を別の item に書き込まないこと
+        rej, prepared = gates.check_gates(self.ger_input(mode="apply"), "ops", now_utc(NOW), "verify", 86400)
+        self.assertEqual(rej, [])
+        prepared = [dataclasses.replace(p, finding_id=FID[0] if i != 1 else FID[1]) for i, p in enumerate(prepared)]
+        real, calls = chmod.set_mode, {"n": 0}
+
+        def flaky(target, mode, ident):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("injected failure")
+            return real(target, mode, ident)
+        with mock.patch.object(chmod, "set_mode", flaky):
+            results, outcome = executor.apply(self.plan(), prepared)
+        self.assertEqual(outcome, executor.ROLLED_BACK)
+        self.assertEqual([(r["result"], r["reason"]) for r in results[:3]],
+                         [("rolled_back", "rolled_back_after_failure"), ("failed", "OSError: injected failure"),
+                          ("skipped", "aborted_after_failure")])
+        self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets))
+
     def test_swapped_target_detected(self):
         inp = self.ger_input()
         self.assertEqual(self.ger("dry-run", inp)[0], 0)
@@ -365,6 +432,35 @@ class TestExecution(Base):
             self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "出力先が不正なのに変更されています")
         self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
 
+    def test_output_must_not_be_audit_log_or_input(self):
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        before = audit.log_path().read_bytes()
+        src = self.write(inp, "dr.json"); src_bytes = Path(src).read_bytes()
+        hl = self.d / "input-hardlink"; os.link(src, hl)
+        for out in (str(audit.log_path()), str(audit.log_dir() / "other.json"), src, str(hl)):
+            code, err = self.run_cli("dry-run", src, "--operator", "ops", "--now", NOW, "-o", out)
+            self.assertEqual(code, 64, (out, err))
+        self.assertEqual(audit.log_path().read_bytes(), before, "監査ログが置き換えられています")
+        self.assertEqual(Path(src).read_bytes(), src_bytes, "入力が上書きされています")
+        self.assertFalse((audit.log_dir() / "other.json").exists())
+
+    def test_output_must_not_be_plan_target(self):
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        hl = self.d / "target-hardlink"; os.link(self.targets[1], hl)
+        for command in ("dry-run", "apply"):
+            src = copy.deepcopy(inp); src["mode"] = command
+            for out in (str(self.targets[1]), str(hl)):
+                code, err = self.run_cli(command, self.write(src), "--operator", "ops", "--now", NOW, "-o", out)
+                self.assertEqual(code, 64, (command, out, err))
+                self.assertIn("計画の対象", err)
+        self.assertTrue(all(mode_of(t) == 0o644 and t.read_text() == "x" for t in self.targets), "対象が変更されています")
+        recs = [json.loads(line) for line in audit.log_path().read_text().splitlines()]
+        self.assertEqual([r["result"] for r in recs[1:]], ["error"] * 4)
+        self.assertTrue(all("計画の対象" in r["error"] for r in recs[1:]))
+        self.assertEqual(audit.verify_chain(), [])
+
     def test_output_write_failure(self):
         inp = self.ger_input()
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
@@ -405,6 +501,19 @@ class TestExecution(Base):
                 audit.append({"command": "verify", "result": "ok"})
         self.assertEqual(self.ger("verify", self.ger_input())[0], 64)
         self.assertEqual(other.read_text(), "")
+
+    def test_audit_dir_must_be_private_and_owned(self):
+        d = audit.log_dir(); d.mkdir()
+        for m in (0o777, 0o730, 0o702):
+            os.chmod(d, m)
+            code, err = self.ger("verify", self.ger_input())
+            self.assertEqual(code, 64, err); self.assertIn("書き込み可能", err)
+        os.chmod(d, 0o700)
+        with mock.patch.object(audit.os, "geteuid", return_value=os.geteuid() + 1):
+            code, err = self.ger("verify", self.ger_input())
+        self.assertEqual(code, 64, err); self.assertIn("所有者", err)
+        self.assertFalse(audit.log_path().exists())
+        self.assertEqual(self.ger("verify", self.ger_input())[0], 0)
 
     def test_audit_records_every_command(self):
         self.dry_then_apply(self.ger_input())

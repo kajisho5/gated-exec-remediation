@@ -30,7 +30,7 @@ def dry_run(plan: dict, prepared: list[Prepared]) -> list[dict]:
 def apply(plan: dict, prepared: list[Prepared], clock=now_utc) -> tuple[list[dict], str | None]:
     """戻り値: (results, outcome)。outcome は None（成功）/ rolled_back / rollback_failed。"""
     results: list[dict] = []
-    done: list[tuple[Prepared, tuple[int, int, int]]] = []  # (計画, 適用後の実体 ID)
+    done: list[tuple[Prepared, tuple[int, int, int], int]] = []  # (計画, 適用後の実体 ID, results の位置)
     failure = None
     outcome = ROLLED_BACK
     for i, p in enumerate(prepared):
@@ -47,15 +47,14 @@ def apply(plan: dict, prepared: list[Prepared], clock=now_utc) -> tuple[list[dic
             results.append(_result(p.finding_id, p.action_type, p.target, fmt(p.before), None, "failed", reason))
             failure = i
             break
-        done.append((p, new_ident))
+        done.append((p, new_ident, len(results)))
         results.append(_result(p.finding_id, p.action_type, p.target, fmt(p.before), fmt(p.mode), "applied", "ok", fmt_ts(clock())))
     if failure is None:
         return results + skipped_decisions(plan), None
     for p in prepared[failure + 1:]:
         results.append(_result(p.finding_id, p.action_type, p.target, fmt(p.before), None, "skipped", "aborted_after_failure"))
-    by_fid = {r["finding_id"]: r for r in results}
-    for p, applied_ident in reversed(done):
-        r = by_fid[p.finding_id]
+    for p, applied_ident, idx in reversed(done):
+        r = results[idx]  # finding_id ではなく位置で対応づける（同じ finding_id の item があっても取り違えない）
         try:
             REGISTRY[p.action_type].set_mode(p.target, p.before, applied_ident)
             r.update(result="rolled_back", after=fmt(p.before), reason="rolled_back_after_failure")

@@ -51,8 +51,21 @@ def _ttl() -> int:
     return int(raw)
 
 
-def _check_output(path: str) -> None:
-    """変更を始める前に -o の出力先を検証する（書けないと分かっている出力先で apply しない）。"""
+def _same_path(a: str, b: str) -> bool:
+    """a と b が同じファイルを指すか（実パスが同じ、または既存なら同じ (st_dev, st_ino)。ハードリンクも検出する）。"""
+    if os.path.realpath(a) == os.path.realpath(b):
+        return True
+    try:
+        return os.path.samefile(a, b)
+    except OSError:  # どちらかが存在しない
+        return False
+
+
+def _check_output(path: str, input_path: str) -> None:
+    """変更を始める前に -o の出力先を検証する（書けないと分かっている出力先で apply しない）。
+
+    os.replace で置き換えるため、監査ログ（とそのディレクトリ内のファイル）や入力ファイルは指定できない。
+    """
     if os.path.isdir(path):
         raise ValueError(f"-o にディレクトリは指定できません: {path}")
     d = os.path.dirname(os.path.abspath(path))
@@ -60,6 +73,25 @@ def _check_output(path: str) -> None:
         raise ValueError(f"-o の出力先ディレクトリがありません: {d}")
     if not os.access(d, os.W_OK | os.X_OK):
         raise ValueError(f"-o の出力先ディレクトリに書き込めません: {d}")
+    if _same_path(path, str(audit.log_path())):
+        raise ValueError(f"-o に監査ログは指定できません: {path}")
+    if any(_same_path(x, str(audit.log_dir())) for x in (d, os.path.dirname(os.path.realpath(path)))):
+        raise ValueError(f"-o に監査ログのディレクトリ内のファイルは指定できません: {path}")
+    if _same_path(path, input_path):
+        raise ValueError(f"-o に入力ファイルは指定できません: {path}")
+
+
+def _output_clash(path: str, prepared) -> str | None:
+    """-o が計画の対象（chmod するファイル）と同じファイルなら理由を返す。対象は入力を読んだ後にしか分からない。"""
+    try:
+        st = os.stat(path)
+        ino = (st.st_dev, st.st_ino)
+    except OSError:
+        ino = None
+    for p in prepared:
+        if os.path.realpath(path) == p.target or ino == p.ident[:2]:
+            return f"-o に計画の対象は指定できません（{p.target}）"
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -74,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         now = now_utc(args.now)
         ttl = _ttl()
         if getattr(args, "output", None) is not None:
-            _check_output(args.output)
+            _check_output(args.output, args.input)
     except ValueError as e:
         print(f"ger: {e}", file=sys.stderr)
         return EXIT_USAGE
@@ -108,8 +140,13 @@ def main(argv: list[str] | None = None) -> int:
                 pass
         try:
             rejections, prepared = check_gates(inp, args.operator, now, args.command, ttl)
+            clash = None if rejections or args.command == "verify" else _output_clash(args.output, prepared)
             if rejections:
                 code = EXIT_REJECTED
+            elif clash:  # 変更を始める前に止める（ゲートの拒否ではなく引数エラーとして記録する）
+                print(f"ger: {clash}（何も変更していません）", file=sys.stderr)
+                record["error"] = clash
+                code = EXIT_USAGE
             elif args.command == "dry-run":
                 log_obj = _log(inp, "dry-run", record["started_at"], clock(), executor.dry_run(inp["plan"], prepared), "ok")
             elif args.command == "apply":

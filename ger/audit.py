@@ -26,6 +26,11 @@ def log_path() -> Path:
 def ensure_writable() -> None:
     d = log_dir()
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    st = os.stat(d)
+    if st.st_uid != os.geteuid():  # 他人のディレクトリでは記録を差し替えられうる
+        raise PermissionError(f"監査ログのディレクトリの所有者が実行ユーザーではありません: {d}")
+    if st.st_mode & 0o022:
+        raise PermissionError(f"監査ログのディレクトリがグループ・他者から書き込み可能です: {d}")
     if not os.access(d, os.W_OK):
         raise PermissionError(f"監査ログに書き込めません: {d}")
     if log_path().is_symlink():
@@ -88,7 +93,10 @@ def find_dry_run(plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds:
         rec = json.loads(line)
         if (rec.get("command") == "dry-run" and rec.get("result") == "ok"
                 and rec.get("plan_hash") == plan_hash and rec.get("input_hash") == input_hash):
-            age = (now - parse_ts(rec["finished_at"])).total_seconds()
+            try:
+                age = (now - parse_ts(rec["finished_at"])).total_seconds()
+            except (KeyError, TypeError, ValueError):  # 解釈できない記録は有効な dry-run として扱わない
+                continue
             if 0 <= age <= ttl_seconds:
                 found = rec
     return found

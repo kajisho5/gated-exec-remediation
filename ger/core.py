@@ -69,15 +69,45 @@ def input_hash(inp: dict) -> str:
     return sha256(canonical({k: v for k, v in inp.items() if k != "mode"}))
 
 
+MAX_DEPTH = 64  # 正規の入力は 10 段未満。深い入力で再帰（json / canonical / スキーマ検証）が尽きる前に拒否する
+
+
 def load_json(path: str) -> Any:
     with open(path, "rb") as f:
         raw = f.read()
-    obj = json.loads(raw.decode("utf-8"), parse_constant=_reject_constant, parse_float=_parse_float)
+    try:
+        obj = json.loads(raw.decode("utf-8"), parse_constant=_reject_constant, parse_float=_parse_float,
+                         object_pairs_hook=_no_duplicate_keys)
+    except RecursionError:
+        raise ValueError(f"入れ子が深すぎます（最大 {MAX_DEPTH} 段）") from None
+    _check_depth(obj)
     try:
         canonical(obj)  # ハッシュ計算できない文書（孤立サロゲートなど）はここで拒否する
     except UnicodeEncodeError as e:
         raise ValueError(f"UTF-8 に符号化できない文字（孤立サロゲート）を含みます: {e.object[e.start:e.end]!r}") from None
+    except RecursionError:
+        raise ValueError(f"入れ子が深すぎます（最大 {MAX_DEPTH} 段）") from None
     return obj
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict:
+    """同じキーが 2 回現れる object は拒否する（後勝ちで黙って上書きされると、読み手により解釈が分かれる）。"""
+    obj: dict = {}
+    for k, v in pairs:
+        if k in obj:
+            raise ValueError(f"JSON object のキー {k!r} が重複しています")
+        obj[k] = v
+    return obj
+
+
+def _check_depth(obj: Any) -> None:
+    stack = [(obj, 1)]
+    while stack:
+        cur, depth = stack.pop()
+        if isinstance(cur, (dict, list)):
+            if depth > MAX_DEPTH:
+                raise ValueError(f"入れ子が深すぎます（最大 {MAX_DEPTH} 段）")
+            stack.extend((v, depth + 1) for v in (cur.values() if isinstance(cur, dict) else cur))
 
 
 def _reject_constant(name: str) -> Any:

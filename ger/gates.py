@@ -42,6 +42,20 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
         return r, []
     if command in ("dry-run", "apply") and inp["mode"] != command:
         return [Rejection("G-1", f"入力の mode={inp['mode']} とコマンド {command} が一致しません")], []
+    # G-1 日時の実在（パターンは 2026-02-30 や T25:00:00 も通すため、ここで解釈できることを確かめる）
+    bad_ts = []
+    for label, v in (("approval.approved_at", inp["approval"]["approved_at"]), ("plan.created_at", plan["created_at"])):
+        try:
+            parse_ts(v)
+        except ValueError:
+            bad_ts.append(Rejection("G-1", f"{label} が実在しない日時です: {v}"))
+    if bad_ts:
+        return bad_ts, []
+    # G-1 finding_id の重複（実行結果・ロールバックを item に一意に対応づけられない計画は構造不正）
+    fids = [it["finding_id"] for it in plan["items"] if it["decision"] == "remediate"]
+    dup = sorted({f for f in fids if fids.count(f) > 1})
+    if dup:
+        return [Rejection("G-1", "remediate の item で finding_id が重複しています", f) for f in dup], []
 
     # G-2 計画状態
     if plan["status"] not in ("ok", "partial"):
@@ -62,14 +76,15 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
     if parse_ts(appr["approved_at"]) < parse_ts(plan["created_at"]):
         rej.append(Rejection("G-3", "approved_at が計画の作成より前です"))
     # G-4 自己承認防止
-    if operator in appr["approved_by"]:
+    # 人名は大文字小文字を区別しない（パターン上 ASCII のみ。"OPS" と "ops" は同一人物として扱う）
+    approvers = {a.casefold() for a in appr["approved_by"]}
+    if operator.casefold() in approvers:
         rej.append(Rejection("G-4", "実行者（--operator）が承認者に含まれています"))
     if rej:
         return rej, []
 
     items = [it for it in plan["items"] if it["decision"] == "remediate"]
     allowed = set(inp["allowed_actions"])
-    approvers = set(appr["approved_by"])
     for it in items:
         a, fid = it["action"], it["finding_id"]
         if a is None:

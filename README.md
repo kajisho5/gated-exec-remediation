@@ -57,18 +57,18 @@ bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode �
 環境変数: `GER_LOG_DIR`（監査ログ、既定 `~/.local/state/ger/`）、`GER_DRYRUN_TTL`（dry-run 記録の有効秒数、既定 86400、最大 604800）。
 `--now`（現在時刻の上書き）はテスト専用で、`GER_ALLOW_NOW_OVERRIDE=1` のときだけ受け付けます（それ以外は終了コード 64）。
 
-`-o` の出力先は変更を始める前に確認します（親ディレクトリが存在し書き込めること、既存のディレクトリでないこと）。remediation-log は監査ログより先に書き出し、書けなかった場合は成功として記録しません（apply で変更が残っている可能性があるときは終了コード 5）。
+`-o` の出力先は変更を始める前に確認します（親ディレクトリが存在し書き込めること、既存のディレクトリでないこと、監査ログ・監査ログのディレクトリ内のファイル・入力ファイル・計画の対象のいずれとも同じファイルでないこと。実パスと、既存なら `st_dev`/`st_ino` で比較するためシンボリックリンクやハードリンク経由でも拒否します）。違反は終了コード 64 で、計画の対象との衝突は入力を読んだ後に判明するため監査ログに `result: "error"` として理由付きで記録します。remediation-log は監査ログより先に書き出し、書けなかった場合は成功として記録しません（apply で変更が残っている可能性があるときは終了コード 5）。
 
 ## ゲート
 
 | # | 拒否する条件 |
 |---|---|
-| G-1 | スキーマ不適合（入力・plan とも strict、版固定）、入力に `findings` がある、mode とコマンドの不一致 |
+| G-1 | スキーマ不適合（入力・plan とも strict、版固定）、入力に `findings` がある、mode とコマンドの不一致、remediate の item で `finding_id` が重複（実行結果を item に一意に対応づけられない）、`approved_at` / `created_at` が実在しない日時（2 月 30 日、25 時など）、入力 JSON の object でキーが重複・入れ子が 64 段を超える |
 | G-2 | plan.status が ok / partial 以外（draft・error） |
 | G-3 | plan_hash が本体と不一致、approval.plan_id 不一致、approval_token ≠ plan_hash、approved_at が未来または計画作成前 |
-| G-4 | `--operator` が承認者に含まれる |
+| G-4 | `--operator` が承認者に含まれる（人名は大文字小文字を区別せずに比較） |
 | G-5 | 操作が allowed_actions に無い、または GER 未対応 |
-| G-6 | reversible / skillpact_effects が無い（ZET 確定済みでない）、reversible が操作の性質と不一致、不可逆操作で承認者 2 名未満 |
+| G-6 | reversible / skillpact_effects が無い（ZET 確定済みでない）、reversible が操作の性質と不一致、不可逆操作で承認者 2 名未満（大文字小文字だけが異なる名前は同一人物として数える） |
 | G-7 | 対象が正規化済みの絶対パスでない・存在しない・シンボリックリンク（途中経路を含む）・通常ファイル/ディレクトリ以外・所有者でない・計画内で重複（ハードリンクで同じ実体を指す場合を含む）、chmod の mode が `^0[0-7]{3}$` 以外 |
 | G-8 | apply 時に、同一 plan_hash・同一入力（mode 以外）の dry-run 成功記録が有効期限内に無い、または監査ログのハッシュチェーンが壊れている |
 
@@ -84,15 +84,15 @@ bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode �
 
 ## 監査ログ
 
-`$GER_LOG_DIR/ger-audit.jsonl`。1 行 1 レコード（command / operator / plan_id / plan_hash / input_hash / output_hash / started_at / finished_at / result / gate_failed / prev_hash）。拒否も記録します。ログに書けない場合は実行しません。
+`$GER_LOG_DIR/ger-audit.jsonl`。1 行 1 レコード（command / operator / plan_id / plan_hash / input_hash / output_hash / started_at / finished_at / result / gate_failed / prev_hash）。拒否も記録します。ログに書けない場合は実行しません。既存のログディレクトリが実行ユーザーの所有でない、またはグループ・他者から書き込み可能な場合も実行しません（終了コード 64）。
 
 ## テスト
 
 ```bash
-tests/run-tests.sh   # 単体テスト（31 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
+tests/run-tests.sh   # 単体テスト（41 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
 ```
 
-root で実行すると「読めないファイル（0000）」のテストは SKIP になります（一般ユーザーでは 31 件すべて実行）。ZET が確定した実際の計画（`tests/fixtures/zet-final-plan.json`）で、スキーマと plan_hash の互換性も確認しています。
+root で実行すると「読めないファイル（0000）」のテストは SKIP になります（一般ユーザーでは 41 件すべて実行）。ZET が確定した実際の計画（`tests/fixtures/zet-final-plan.json`）で、スキーマと plan_hash の互換性も確認しています。
 
 ## ライセンス
 
