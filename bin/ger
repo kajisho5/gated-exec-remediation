@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # GER 起動スクリプト。外部コマンドを使わず（bash 組み込みのみで）パスを解決し、
-# python3 -I（環境変数・ユーザー site・カレントディレクトリを無視）で実行する。
+# python3 -I -S（環境変数・site（.pth を含む）・カレントディレクトリを無視）で実行する。
 set -euo pipefail
 SELF="${BASH_SOURCE[0]}"
 case "$SELF" in */*) ;; *) SELF="./$SELF" ;; esac
 BIN_DIR="$(cd "${SELF%/*}" && pwd -P)"
-exec python3 -I "${BIN_DIR%/*}/ger/__main__.py" "$@"
+exec python3 -I -S "${BIN_DIR%/*}/ger/__main__.py" "$@"

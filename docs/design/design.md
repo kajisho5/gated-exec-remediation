@@ -40,7 +40,7 @@ ZET が確定した修復計画を、人間の明示承認を受けたうえで�
 `ger-input.json` は契約 §5（`schema_version` / `plan` / `approval` / `mode` / `allowed_actions`）。`mode` とサブコマンドが食い違う場合は拒否。
 
 ### 1.4 非機能要件
-- **依存ゼロ**: Python 3.11 以上の標準ライブラリのみ。`python3 -I` で起動
+- **依存ゼロ**: Python 3.11 以上の標準ライブラリのみ。`python3 -I -S` で起動（site を読み込まないので site-packages の `.pth` も実行されない）
 - **外部プロセスを起動しない**: `chmod` も `os.chmod` で行い、シェル・外部コマンドを使わない
 - **fail-closed**: どのゲートでも失敗したら何も変更しない
 - **冪等**: 既に目標状態なら `skipped`（`reason: "already_compliant"`）
@@ -114,7 +114,7 @@ ZET が確定した修復計画を、人間の明示承認を受けたうえで�
 ```
 gated-exec-remediation/
 ├── SKILL.md                          # エージェント向け手順（承認を代行しない、apply 前に必ず dry-run）
-├── bin/ger                           # 起動スクリプト（bash 組み込みのみでパス解決し python3 -I で起動）
+├── bin/ger                           # 起動スクリプト（bash 組み込みのみでパス解決し python3 -I -S で起動）
 ├── ger/
 │   ├── __main__.py / cli.py          # 引数・終了コード・--operator 必須・監査ログ記録
 │   ├── gates.py                      # G-1〜G-8（変更を一切行わない）
