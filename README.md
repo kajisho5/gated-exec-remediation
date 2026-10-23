@@ -62,7 +62,7 @@ Input ([schemas/ger-input.schema.json](schemas/ger-input.schema.json)):
 | 5 | Rollback could not be completed either (manual action required) |
 | 64 / 70 | Usage or environment error / internal error |
 
-Environment variables: `GER_LOG_DIR` (audit log, default `~/.local/state/ger/`), `GER_DRYRUN_TTL` (validity of a dry-run record in seconds, default 86400, maximum 604800).
+Environment variables: `GER_LOG_DIR` (audit log, default `$XDG_STATE_HOME/ger/`, or `~/.local/state/ger/` when `XDG_STATE_HOME` is unset), `GER_DRYRUN_TTL` (validity of a dry-run record in seconds, default 86400, maximum 604800).
 `--now` (overrides the current time) is test-only and is accepted only when `GER_ALLOW_NOW_OVERRIDE=1` is set (otherwise exit code 64).
 
 The `-o` destination is checked before any change begins: its parent directory must exist and be writable, it must not be an existing directory, and it must not be the same file as the audit log, a file inside the audit log directory, an input file, or any target of the plan. Because the comparison uses the real path and, for existing files, `st_dev`/`st_ino`, it is rejected even via symbolic or hard links. A violation yields exit code 64; a collision with a plan target is only discovered after the input has been read, so it is recorded in the audit log as `result: "error"` with the reason. The remediation-log is written before the audit log, and if it cannot be written the run is not recorded as a success (exit code 5 when apply may have left changes in place).
