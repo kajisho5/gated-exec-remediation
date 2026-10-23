@@ -63,7 +63,7 @@ bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode �
 
 | # | 拒否する条件 |
 |---|---|
-| G-1 | スキーマ不適合（入力・plan とも strict、版固定）、入力に `findings` がある、mode とコマンドの不一致、remediate の item で `finding_id` が重複（実行結果を item に一意に対応づけられない）、`approved_at` / `created_at` が実在しない日時（2 月 30 日、25 時など） |
+| G-1 | スキーマ不適合（入力・plan とも strict、版固定）、入力に `findings` がある、mode とコマンドの不一致、remediate の item で `finding_id` が重複（実行結果を item に一意に対応づけられない）、`approved_at` / `created_at` が実在しない日時（2 月 30 日、25 時など）、入力 JSON の object でキーが重複・入れ子が 64 段を超える |
 | G-2 | plan.status が ok / partial 以外（draft・error） |
 | G-3 | plan_hash が本体と不一致、approval.plan_id 不一致、approval_token ≠ plan_hash、approved_at が未来または計画作成前 |
 | G-4 | `--operator` が承認者に含まれる（人名は大文字小文字を区別せずに比較） |

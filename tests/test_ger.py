@@ -268,6 +268,22 @@ class TestGates(Base):
         with self.assertRaises(ValueError):
             canonical({"x": float("nan")})
 
+    def test_g1_duplicate_keys_rejected(self):
+        inp = json.dumps(self.ger_input())
+        dup = inp.replace('"approved_by": ["security-lead"]', '"approved_by": ["ops"], "approved_by": ["security-lead"]')
+        self.assertNotEqual(dup, inp)
+        code, err = self.run_cli("verify", self.write_raw(dup), "--operator", "ops", "--now", NOW)
+        self.assertEqual(code, 3, err)
+        self.assertIn("G-1", err); self.assertIn("重複", err)
+
+    def test_g1_deep_nesting_rejected(self):
+        inp = json.dumps(self.ger_input())
+        for depth in (100, 200000):  # 200000 は json.loads 自体が RecursionError になる深さ
+            deep = inp[:-1] + ', "x": ' + "[" * depth + "]" * depth + "}"
+            code, err = self.run_cli("verify", self.write_raw(deep), "--operator", "ops", "--now", NOW)
+            self.assertEqual(code, 3, err)
+            self.assertIn("G-1", err); self.assertIn("入れ子が深すぎます", err)
+
     def test_g8_apply_requires_dry_run(self):
         self.assertRejected(self.ger_input(mode="apply"), "G-8", command="apply")
 
