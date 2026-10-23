@@ -181,6 +181,16 @@ class TestGates(Base):
     def test_g4_self_approval(self):
         self.assertRejected(self.ger_input(approvers=("ops",)), "G-4", operator="ops")
 
+    def test_names_compared_case_insensitively(self):
+        self.assertRejected(self.ger_input(approvers=("ops",)), "G-4", operator="OPS")
+        self.assertRejected(self.ger_input(approvers=("Ops",)), "G-4", operator="ops")
+        p = self.plan()
+        p["items"][0]["action"]["reversible"] = False
+        p["plan_hash"] = plan_hash(p)
+        code, err = self.ger("verify", self.ger_input(plan=p, approvers=("alice", "ALICE")))
+        self.assertEqual(code, 3, err)
+        self.assertIn("承認者 2 名以上", err)
+
     def test_g5_allowlist_and_unsupported(self):
         self.assertRejected(self.ger_input(allowed=()), "G-5")
         p = self.plan()

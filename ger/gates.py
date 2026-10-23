@@ -76,14 +76,15 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
     if parse_ts(appr["approved_at"]) < parse_ts(plan["created_at"]):
         rej.append(Rejection("G-3", "approved_at が計画の作成より前です"))
     # G-4 自己承認防止
-    if operator in appr["approved_by"]:
+    # 人名は大文字小文字を区別しない（パターン上 ASCII のみ。"OPS" と "ops" は同一人物として扱う）
+    approvers = {a.casefold() for a in appr["approved_by"]}
+    if operator.casefold() in approvers:
         rej.append(Rejection("G-4", "実行者（--operator）が承認者に含まれています"))
     if rej:
         return rej, []
 
     items = [it for it in plan["items"] if it["decision"] == "remediate"]
     allowed = set(inp["allowed_actions"])
-    approvers = set(appr["approved_by"])
     for it in items:
         a, fid = it["action"], it["finding_id"]
         if a is None:
