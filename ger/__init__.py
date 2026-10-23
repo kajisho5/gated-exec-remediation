@@ -1,1 +1,1 @@
-"""GER — Gated-Exec Remediation（修復層）。全ゲートを通過した操作だけを実行する。"""
+"""GER - Gated-Exec Remediation (the remediation layer). Executes only operations that passed every gate."""

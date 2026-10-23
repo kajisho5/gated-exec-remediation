@@ -1,16 +1,16 @@
-"""隔離ストア（quarantine store）とジャーナル。
+"""Quarantine store and journal.
 
-場所: GER_QUARANTINE_DIR（指定時）、なければ $XDG_STATE_HOME/ger/quarantine、なければ ~/.local/state/ger/quarantine。
-起動時に一度だけ実パスへ解決する。所有者は実行ユーザー、mode は 0700。マーカーファイル .ger-quarantine-store を置く
-（ZES 1.1 はこのマーカーのあるディレクトリを走査しない予定。docs/design/design.md §11）。
+Location: GER_QUARANTINE_DIR (when set), otherwise $XDG_STATE_HOME/ger/quarantine, otherwise ~/.local/state/ger/quarantine.
+Resolved to a real path once at startup. Owned by the executing user, mode 0700. Holds the marker file .ger-quarantine-store
+(ZES 1.1 is planned to skip directories with this marker; docs/design/design.md §11).
 
-構成:
-  <store>/<run_id>/<seq>/payload        隔離したもの（ファイル・ツリー・リンク）または編集前のファイル（ハードリンク）
-  <store>/<run_id>/<seq>/manifest.json  元のパス・実体 ID・mode・ハッシュ・plan_id など（0600）。その SHA-256 を監査ログに載せる
-  <store>/<run_id>/<seq>/restored.json  ger restore で戻した記録
-  <store>/journal/<run_id>.jsonl        各ステップの意図と結果（fsync）。途中で落ちた実行は ger recover で巻き戻す
-ストアの中の名前は連番だけを使い、元の名前は使わない（.pth や package.json の名前で読み込まれないように）。
-GER はストアから何も削除しない（purge は作業者が手で行う。消した後は restore もロールバックもできない）。
+Layout:
+  <store>/<run_id>/<seq>/payload        the quarantined object (file, tree, link) or the file before the edit (hard link)
+  <store>/<run_id>/<seq>/manifest.json  original path, object ID, mode, hash, plan_id and so on (0600). Its SHA-256 goes into the audit log
+  <store>/<run_id>/<seq>/restored.json  record of a ger restore
+  <store>/journal/<run_id>.jsonl        intent and result of each step (fsync). A run that died halfway is rolled back with ger recover
+Names inside the store are sequence numbers only; original names are never used (so nothing is loaded by a .pth or package.json name).
+GER deletes nothing from the store (the worker purges by hand; after that, neither restore nor rollback is possible).
 """
 from __future__ import annotations
 
@@ -52,17 +52,17 @@ class StoreError(Exception):
 
 
 def ensure() -> int:
-    """ストアを用意し、そのディレクトリの fd（O_PATH）を返す。所有者・mode を確かめる。"""
+    """Prepares the store and returns the fd (O_PATH) of its directory. Checks owner and mode."""
     d = store_dir()
     os.makedirs(d, mode=0o700, exist_ok=True)
     fd = fsutil.open_dir(d)
     st = os.fstat(fd)
     if st.st_uid != os.geteuid():
         os.close(fd)
-        raise StoreError(f"隔離ストアの所有者が実行ユーザーではありません: {d}")
+        raise StoreError(f"the quarantine store is not owned by the executing user: {d}")
     if st.st_mode & 0o077:
         os.close(fd)
-        raise StoreError(f"隔離ストアがグループ・他者から読み書きできます（0700 にしてください）: {d}")
+        raise StoreError(f"the quarantine store is readable or writable by group or others (set it to 0700): {d}")
     try:
         os.stat(MARKER, dir_fd=fd, follow_symlinks=False)
     except FileNotFoundError:
@@ -101,7 +101,7 @@ def write_json_excl(dir_fd: int, name: str, obj) -> str:
 
 
 class Entry:
-    """1 回の移動（rename）に対応するストアのエントリ。"""
+    """A store entry for one move (rename)."""
 
     def __init__(self, run_id: str, seq: int):
         self.run_id, self.seq = run_id, seq
@@ -134,7 +134,7 @@ def _split_qid(qid: str) -> tuple[str, str]:
     parts = qid.split("/")
     if len(parts) != 2 or not all(p and p not in (".", "..") and "\0" not in p for p in parts) \
             or not parts[1].isdigit():
-        raise StoreError(f"quarantine_id の形式が不正です: {qid!r}")
+        raise StoreError(f"invalid quarantine_id format: {qid!r}")
     return parts[0], parts[1]
 
 
@@ -148,7 +148,7 @@ def read_manifest(qid: str) -> tuple[dict, str]:
 
 
 def list_entries() -> list[dict]:
-    """ストアのすべてのエントリ（読むだけ）。"""
+    """All entries of the store (read only)."""
     out = []
     d = store_dir()
     if not os.path.isdir(d):
@@ -178,7 +178,7 @@ def list_entries() -> list[dict]:
 
 
 class Journal:
-    """1 回の実行のジャーナル（JSONL、各行を書くたびに fsync）。"""
+    """Journal of one run (JSONL, fsync after every line)."""
 
     def __init__(self, run_id: str, header: dict):
         sfd = ensure()
@@ -209,7 +209,7 @@ TERMINAL = ("commit", "rolled_back", "recovered", "dry_run")
 
 
 def open_journals() -> list[tuple[str, list[dict]]]:
-    """終端の記録（commit / rolled_back / recovered）が無いジャーナル。"""
+    """Journals without a final record (commit / rolled_back / recovered)."""
     out = []
     jd = os.path.join(store_dir(), "journal")
     if not os.path.isdir(jd):

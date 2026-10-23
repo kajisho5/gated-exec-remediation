@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""ワードマークを Inter Display SemiBold (SIL OFL 1.1) からアウトライン化して SVG パスにする。
-fresnel の brand/src/wordmark.py と同じ手法・同じ tracking。
+"""Converts the wordmark from Inter Display SemiBold (SIL OFL 1.1) to outlines as SVG paths.
+Same method and same tracking as fresnel's brand/src/wordmark.py.
 
-    python3 brand/src/wordmark.py "<text>" [font.otf]     # 要 fonttools
+    python3 brand/src/wordmark.py "<text>" [font.otf]     # needs fonttools
 """
 import json, sys
 from pathlib import Path
@@ -25,7 +25,7 @@ bounds = BoundsPen(gs)
 x = 0
 for ch in TEXT:
     name = cmap[ord(ch)]
-    tp = (1, 0, 0, -1, x, 0)  # フォント座標は y 上向き
+    tp = (1, 0, 0, -1, x, 0)  # Font coordinates have y pointing up
     gs[name].draw(TransformPen(pen, tp))
     gs[name].draw(TransformPen(bounds, tp))
     x += hmtx[name][0] + TRACK * upm

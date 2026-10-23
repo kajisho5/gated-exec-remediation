@@ -1,9 +1,9 @@
-"""外部プロセス・ネットワークがゼロであることの検証（strace）。tests/run-tests.sh から呼ぶ。
+"""Checks that there are zero external processes and zero network use (strace). Called from tests/run-tests.sh.
 
-全コマンド（preview / verify / dry-run / apply / quarantine-list / confirm / restore（dry-run・apply）/ recover /
-verify-log）を、全操作種別（quarantine・edit_json・edit_toml・remove_line・disable_mcp_server・checklist・chmod）を
-含む計画で実行し、各実行の execve が bash と python3 だけであること、ネットワークのシステムコール（socket /
-connect など）が 0 件であることを確かめる。
+Runs every command (preview / verify / dry-run / apply / quarantine-list / confirm / restore (dry-run, apply) / recover /
+verify-log) on a plan containing every operation type (quarantine, edit_json, edit_toml, remove_line, disable_mcp_server, checklist, chmod)
+and checks that each run's execve calls are only bash and python3 and that there are zero network system calls (socket /
+connect and so on).
 """
 from __future__ import annotations
 
@@ -77,16 +77,16 @@ def main() -> int:
         runs.append(label)
         nonlocal fail
         if r.returncode != ok:
-            print(f"FAIL: ger {label} の終了コードが {r.returncode}（期待値 {ok}）\n{r.stderr[-1500:]}")
+            print(f"FAIL: exit code of ger {label} is {r.returncode} (expected {ok})\n{r.stderr[-1500:]}")
             fail = 1
         elif bad:
-            print(f"FAIL: ger {label} が外部プロセスを起動:\n" + "\n".join(bad))
+            print(f"FAIL: ger {label} started an external process:\n" + "\n".join(bad))
             fail = 1
         elif net:
-            print(f"FAIL: ger {label} がネットワークのシステムコールを使用: {sorted(set(net))}")
+            print(f"FAIL: ger {label} used network system calls: {sorted(set(net))}")
             fail = 1
         else:
-            print(f"ok   ger {label}: execve は bash/python3 のみ、ネットワークのシステムコール 0 件")
+            print(f"ok   ger {label}: execve only bash/python3, network system calls: 0")
         return r
     P = lambda n: os.path.join(t, n)  # noqa: E731
     ger("preview", P("draft.json"), "--operator", "alice", "-o", P("final.json"))
@@ -100,7 +100,7 @@ def main() -> int:
     ger("dry-run", P("dry-run.json"), "--operator", "ops", "-o", P("log-dry.json"))
     ger("apply", P("apply.json"), "--operator", "ops", "-o", P("log-apply.json"))
     if os.path.exists(J("payload.js")) or oct(os.stat(J("id_rsa")).st_mode & 0o777) != "0o600":
-        print("FAIL: apply の結果が期待と違います")
+        print("FAIL: the apply result differs from the expected one")
         fail = 1
     ger("confirm", P("apply.json"), "--operator", "ops", "--item", items[7]["finding_id"], "--step", "CL-CRON:s1")
     r = ger("quarantine-list", "--json")
@@ -115,12 +115,12 @@ def main() -> int:
     ger("restore", P("rq-dry.json"), "--operator", "ops", "-o", P("log-rq-dry.json"), name="restore (dry-run)")
     ger("restore", P("rq.json"), "--operator", "ops", "-o", P("log-rq.json"), name="restore (apply)")
     if not os.path.exists(J("payload.js")) or "evil" not in open(J(".mcp.json")).read():
-        print("FAIL: restore の結果が期待と違います")
+        print("FAIL: the restore result differs from the expected one")
         fail = 1
     ger("recover", P("apply.json"), "--operator", "ops", "-o", P("log-recover.json"))
     ger("verify-log")
-    print(f"{'ok  ' if not fail else 'FAIL'} 対象のコマンド: {', '.join(runs)}")
-    for dp, dns, fns in os.walk(t):  # 隔離ストアの 0500 / 0400 を戻して片付ける（テストの一時ディレクトリだけ）
+    print(f"{'ok  ' if not fail else 'FAIL'} commands covered: {', '.join(runs)}")
+    for dp, dns, fns in os.walk(t):  # Restore the quarantine store's 0500 / 0400 modes to clean up (only the test's temporary directory)
         for n in dns + fns:
             if not os.path.islink(os.path.join(dp, n)):
                 os.chmod(os.path.join(dp, n), 0o700)

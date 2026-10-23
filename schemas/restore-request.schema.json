@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/kajisho5/gated-exec-remediation/schemas/restore-request.schema.json",
   "title": "GER restore-request.json",
-  "description": "ger restore の入力。隔離ストアのエントリ（ger quarantine-list --json で一覧できる）を元の場所へ戻す。approval_token は approval と mode を除いた正規化 JSON の SHA-256。承認者は 2 名以上。dry-run の成功記録が必要で、1 回の apply で使い切る。未知フィールドは拒否（strict）。",
+  "description": "Input of ger restore. Moves quarantine store entries (listed by ger quarantine-list --json) back to their original location. approval_token is the SHA-256 of the canonical JSON without approval and mode. 2 or more approvers. Requires a successful dry-run record, used up by one apply. Unknown fields are rejected (strict).",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "restore_id", "created_at", "mode", "entries", "approval"],
@@ -11,7 +11,7 @@
     "restore_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
     "created_at": { "$ref": "#/$defs/ts" },
     "mode": { "enum": ["dry-run", "apply"] },
-    "reason": { "type": "string", "maxLength": 2000, "description": "戻す理由（誤検知だった、など）" },
+    "reason": { "type": "string", "maxLength": 2000, "description": "Reason for restoring (for example, a false positive)" },
     "entries": {
       "type": "array", "minItems": 1, "maxItems": 512,
       "items": {

@@ -1,7 +1,7 @@
-"""GER の共通部品: 時刻、正規化 JSON、plan_hash / input_hash、スキーマ、原子的書き出し。
+"""Shared parts of GER: time, canonical JSON, plan_hash / input_hash, schemas, atomic writes.
 
-plan_hash の定義は ZET（zet/core.py）と同一でなければならない。テストで ZET が確定した計画の
-plan_hash を GER の実装で再計算し、一致することを確認している。
+The definition of plan_hash must be identical to ZET's (zet/core.py). The tests recompute the plan_hash of a plan
+finalized by ZET with GER's implementation and check that they match.
 """
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ from .jsonschema_lite import Validator
 VERSION = "0.1.0"
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMAS = ROOT / "schemas"
-# 外部への副作用・コード実行を起こしうる SkillPact 0.8 の効果（G-6）。ZET（zet/core.py）と同じ集合。
-# read（機密ファイルの読み取りを含む。旧 secrets）と write（作業領域外への書き込みを含む。旧 persist）は単独では含めない
+# SkillPact 0.8 effects that can cause external side effects or code execution (G-6). Same set as ZET (zet/core.py).
+# read (includes reading sensitive files; formerly secrets) and write (includes writes outside the workspace; formerly persist) are not included on their own
 RISKY_EFFECTS = ("exec", "network", "spend", "send")
 
 
@@ -67,11 +67,11 @@ def plan_hash(plan: dict) -> str:
 
 
 def input_hash(inp: dict) -> str:
-    """dry-run と apply で同じ入力かを判定するハッシュ（mode だけが異なることを許す）。"""
+    """Hash that tells whether dry-run and apply got the same input (only mode may differ)."""
     return sha256(canonical({k: v for k, v in inp.items() if k != "mode"}))
 
 
-MAX_DEPTH = 64  # 正規の入力は 10 段未満。深い入力で再帰（json / canonical / スキーマ検証）が尽きる前に拒否する
+MAX_DEPTH = 64  # Legitimate input has fewer than 10 levels. Deep input is rejected before recursion (json / canonical / schema validation) runs out
 
 
 def load_json(path: str) -> Any:
@@ -81,23 +81,23 @@ def load_json(path: str) -> Any:
         obj = json.loads(raw.decode("utf-8"), parse_constant=_reject_constant, parse_float=_parse_float,
                          object_pairs_hook=_no_duplicate_keys)
     except RecursionError:
-        raise ValueError(f"入れ子が深すぎます（最大 {MAX_DEPTH} 段）") from None
+        raise ValueError(f"nesting is too deep (maximum {MAX_DEPTH} levels)") from None
     _check_depth(obj)
     try:
-        canonical(obj)  # ハッシュ計算できない文書（孤立サロゲートなど）はここで拒否する
+        canonical(obj)  # Documents that cannot be hashed (lone surrogates and so on) are rejected here
     except UnicodeEncodeError as e:
-        raise ValueError(f"UTF-8 に符号化できない文字（孤立サロゲート）を含みます: {e.object[e.start:e.end]!r}") from None
+        raise ValueError(f"contains a character that cannot be encoded as UTF-8 (lone surrogate): {e.object[e.start:e.end]!r}") from None
     except RecursionError:
-        raise ValueError(f"入れ子が深すぎます（最大 {MAX_DEPTH} 段）") from None
+        raise ValueError(f"nesting is too deep (maximum {MAX_DEPTH} levels)") from None
     return obj
 
 
 def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict:
-    """同じキーが 2 回現れる object は拒否する（後勝ちで黙って上書きされると、読み手により解釈が分かれる）。"""
+    """Rejects an object in which the same key appears twice (if the last one silently wins, readers can disagree on its meaning)."""
     obj: dict = {}
     for k, v in pairs:
         if k in obj:
-            raise ValueError(f"JSON object のキー {k!r} が重複しています")
+            raise ValueError(f"duplicate key {k!r} in a JSON object")
         obj[k] = v
     return obj
 
@@ -108,18 +108,18 @@ def _check_depth(obj: Any) -> None:
         cur, depth = stack.pop()
         if isinstance(cur, (dict, list)):
             if depth > MAX_DEPTH:
-                raise ValueError(f"入れ子が深すぎます（最大 {MAX_DEPTH} 段）")
+                raise ValueError(f"nesting is too deep (maximum {MAX_DEPTH} levels)")
             stack.extend((v, depth + 1) for v in (cur.values() if isinstance(cur, dict) else cur))
 
 
 def _reject_constant(name: str) -> Any:
-    raise ValueError(f"非標準の JSON 定数 {name} は受け付けません")
+    raise ValueError(f"the non-standard JSON constant {name} is not accepted")
 
 
 def _parse_float(s: str) -> float:
     f = float(s)
     if not math.isfinite(f):
-        raise ValueError(f"有限でない数値 {s} は受け付けません")
+        raise ValueError(f"the non-finite number {s} is not accepted")
     return f
 
 

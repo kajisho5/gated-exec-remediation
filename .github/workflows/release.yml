@@ -1,5 +1,5 @@
-# main の CHANGELOG.md 先頭の版（"## X.Y.Z — YYYY-MM-DD"）に対応するタグ vX.Y.Z が無ければ、
-# タグと GitHub Release を作る。リリースノートは CHANGELOG のその版の節。外部 Action は使わない（gh はランナー標準）。
+# If there is no tag vX.Y.Z for the first version in main's CHANGELOG.md ("## X.Y.Z — YYYY-MM-DD"),
+# creates the tag and a GitHub Release. The release notes are that version's section of the CHANGELOG. No external Actions (gh is on the runner).
 name: release
 on:
   push:
@@ -19,19 +19,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: CHANGELOG から版とリリースノートを取り出す
+      - name: Extract the version and release notes from CHANGELOG
         id: ver
         run: |
           line="$(grep -m1 -E '^## [0-9]+\.[0-9]+\.[0-9]+ ' CHANGELOG.md || true)"
           ver="$(printf '%s' "$line" | sed -E 's/^## ([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
-          if [ -z "$ver" ]; then echo "CHANGELOG に版の見出しがありません"; exit 1; fi
-          # その版の見出しの次の行から、次の "## " 見出しの手前まで
+          if [ -z "$ver" ]; then echo "CHANGELOG has no version heading"; exit 1; fi
+          # From the line after that version's heading up to the next "## " heading
           awk -v v="$ver" 'BEGIN{p=0} /^## /{ if (p) exit; if (index($0, "## " v " ")==1) {p=1; next} } p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
-      - name: タグと Release を作成（既にあれば何もしない）
+      - name: Create the tag and Release (nothing if they already exist)
         env:
           GH_TOKEN: ${{ github.token }}
           VER: ${{ steps.ver.outputs.version }}
         run: |
-          if gh release view "v$VER" >/dev/null 2>&1; then echo "v$VER は作成済み"; exit 0; fi
+          if gh release view "v$VER" >/dev/null 2>&1; then echo "v$VER already exists"; exit 0; fi
           gh release create "v$VER" --target "$GITHUB_SHA" --title "v$VER" --notes-file "$RUNNER_TEMP/notes.md"

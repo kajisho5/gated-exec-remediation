@@ -1,26 +1,26 @@
-"""ger コマンド。
+"""The ger command.
 
   ger verify  <ger-input.json> --operator NAME
   ger dry-run <ger-input.json> --operator NAME -o remediation-log.json
   ger apply   <ger-input.json> --operator NAME -o remediation-log.json
   ger preview <draft-plan.json> --operator NAME -o previewed-plan.json [--report R] [--diff]
-                         下書きの action の params（ハッシュ・ops・expected_after_sha256）を現在の内容から埋める（変更しない）
+                         fills the params of the draft actions (hashes, ops, expected_after_sha256) from the current content (changes nothing)
   ger confirm <ger-input.json> --operator NAME --item FINDING_ID --step CL-XXX:sN
-                         checklist / followup の手順を作業者が確認したことを監査ログに記録する
+                         records in the audit log that the worker confirmed a checklist / followup step
   ger restore <restore-request.json> --operator NAME -o remediation-log.json
-                         隔離ストアのエントリを元の場所へ戻す（承認者 2 名、dry-run 必須）
+                         moves quarantine store entries back to their original location (2 approvers, dry-run required)
   ger recover <ger-input.json> --operator NAME -o remediation-log.json
-                         途中で落ちた apply をジャーナルから巻き戻す
-  ger quarantine-list [--json] [--plan-id ID]   隔離ストアの一覧とマニフェストの検証（読むだけ）
-  ger verify-log [LOG]   監査ログのハッシュチェーンを検証する（読むだけ。監査ログには記録しない）
+                         rolls back an apply that died halfway, using the journal
+  ger quarantine-list [--json] [--plan-id ID]   lists the quarantine store and verifies manifests (read only)
+  ger verify-log [LOG]   verifies the hash chain of the audit log (read only; not recorded in the audit log)
 
-終了コード: 0=成功 / 3=ゲートで拒否（何も変更していない） / 4=失敗しロールバック済み /
-           5=ロールバックも失敗、または適用後に remediation-log を書けなかった（要手動対応） /
-           64=引数・環境エラー / 70=内部エラー（verify-log: 0=健全 / 3=破損 / 64=ログが無い）
-環境変数: GER_LOG_DIR（監査ログ。起動時に実パスへ解決する）、GER_DRYRUN_TTL（dry-run 記録の有効秒数、既定 86400）、
-         GER_APPROVAL_MAX_AGE（承認の有効秒数、既定 604800）、
-         GER_QUARANTINE_DIR（隔離ストア。既定 $XDG_STATE_HOME/ger/quarantine または ~/.local/state/ger/quarantine）、
-         GER_ALLOW_NOW_OVERRIDE（=1 のときだけ --now と now_override: true の計画を受け付ける。テスト専用）
+Exit codes: 0=success / 3=rejected by a gate (nothing changed) / 4=failed and rolled back /
+           5=rollback also failed, or remediation-log could not be written after applying (manual action required) /
+           64=argument or environment error / 70=internal error (verify-log: 0=intact / 3=broken / 64=no log)
+Environment: GER_LOG_DIR (audit log; resolved to a real path at startup), GER_DRYRUN_TTL (validity of a dry-run record in seconds, default 86400),
+         GER_APPROVAL_MAX_AGE (validity of an approval in seconds, default 604800),
+         GER_QUARANTINE_DIR (quarantine store; default $XDG_STATE_HOME/ger/quarantine or ~/.local/state/ger/quarantine),
+         GER_ALLOW_NOW_OVERRIDE (only =1 accepts --now and plans with now_override: true; for tests only)
 """
 from __future__ import annotations
 
@@ -55,120 +55,120 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parser() -> argparse.ArgumentParser:
-    p = _Parser(prog="ger", description="GER — Gated-Exec Remediation（修復層）")
+    p = _Parser(prog="ger", description="GER - Gated-Exec Remediation (remediation layer)")
     sub = p.add_subparsers(dest="command", required=True)
-    s = sub.add_parser("verify-log", help="監査ログのハッシュチェーンを検証する")
-    s.add_argument("log", nargs="?", help="検証するログ（既定 $GER_LOG_DIR/ger-audit.jsonl）")
-    s = sub.add_parser("quarantine-list", help="隔離ストアの一覧（読むだけ）")
+    s = sub.add_parser("verify-log", help="verify the hash chain of the audit log")
+    s.add_argument("log", nargs="?", help="log to verify (default $GER_LOG_DIR/ger-audit.jsonl)")
+    s = sub.add_parser("quarantine-list", help="list the quarantine store (read only)")
     s.add_argument("--json", action="store_true")
     s.add_argument("--plan-id")
     for name in ("verify", "dry-run", "apply", "preview", "confirm", "restore", "recover"):
         s = sub.add_parser(name)
         s.add_argument("input")
-        s.add_argument("--operator", required=True, help="実行者。承認者と同一人物は不可（G-4）")
-        s.add_argument("--now", help="現在時刻の上書き（RFC 3339 UTC、テスト専用。GER_ALLOW_NOW_OVERRIDE=1 が必要）")
+        s.add_argument("--operator", required=True, help="the operator. Must not be one of the approvers (G-4)")
+        s.add_argument("--now", help="override the current time (RFC 3339 UTC, for tests only; requires GER_ALLOW_NOW_OVERRIDE=1)")
         if name not in ("verify", "confirm"):
             s.add_argument("-o", "--output", required=True,
-                           help="previewed-plan.json の出力先" if name == "preview" else "remediation-log.json の出力先")
+                           help="output path of previewed-plan.json" if name == "preview" else "output path of remediation-log.json")
         if name == "preview":
-            s.add_argument("--report", help="item ごとの結果（ok / rejected と理由）の JSON の出力先")
-            s.add_argument("--diff", action="store_true", help="編集の unified diff を標準エラー出力に出す（ログには残さない）")
+            s.add_argument("--report", help="output path of the per-item result JSON (ok / rejected and the reason)")
+            s.add_argument("--diff", action="store_true", help="print the unified diff of edits to standard error (not kept in logs)")
         if name == "confirm":
             s.add_argument("--item", required=True, help="finding_id")
-            s.add_argument("--step", required=True, help="CL-XXX:sN（template と手順の id）")
+            s.add_argument("--step", required=True, help="CL-XXX:sN (template and step id)")
     return p
 
 
 def _err(text: str) -> None:
-    """標準エラー出力へ。入力由来の文字列（キー名・対象パス・例外の文言）を含みうるため制御文字をエスケープする。"""
+    """To standard error. Escapes control characters because the text may contain strings from input (key names, target paths, exception text)."""
     print(safe_text(text), file=sys.stderr)
 
 
 def _ttl() -> int:
     raw = os.environ.get("GER_DRYRUN_TTL", "86400")
     if not raw.isdigit() or not 0 < int(raw) <= 7 * 86400:
-        raise ValueError("GER_DRYRUN_TTL は 1〜604800 の整数（秒）で指定してください")
+        raise ValueError("GER_DRYRUN_TTL must be an integer from 1 to 604800 (seconds)")
     return int(raw)
 
 
 def _approval_max_age() -> int:
     raw = os.environ.get("GER_APPROVAL_MAX_AGE", str(7 * 86400))
     if not raw.isascii() or not raw.isdigit() or not 0 < int(raw) <= 366 * 86400:
-        raise ValueError("GER_APPROVAL_MAX_AGE は 1〜31622400 の整数（秒）で指定してください")
+        raise ValueError("GER_APPROVAL_MAX_AGE must be an integer from 1 to 31622400 (seconds)")
     return int(raw)
 
 
 def _verify_log(path: str | None) -> int:
     p = Path(path) if path else audit.log_path()
     if not p.exists():
-        _err(f"ger verify-log: 監査ログがありません: {p}")
+        _err(f"ger verify-log: audit log not found: {p}")
         return EXIT_USAGE
     try:
         n, problems = audit.scan_chain(p)
     except OSError as e:
-        _err(f"ger verify-log: 監査ログを読めません（{e}）")
+        _err(f"ger verify-log: cannot read the audit log ({e})")
         return EXIT_USAGE
     if problems:
-        _err(f"ger verify-log: ハッシュチェーンが壊れています（{len(problems)} 件、全 {n} 行）: {p}")
+        _err(f"ger verify-log: the hash chain is broken (problems: {len(problems)}, lines: {n}): {p}")
         for x in problems:
             _err(f"  {x}")
         return EXIT_REJECTED
-    _err(f"ger verify-log: OK（{n} 件、ハッシュチェーンは健全）: {p}")
+    _err(f"ger verify-log: OK (records: {n}, hash chain intact): {p}")
     return EXIT_OK
 
 
 def _same_path(a: str, b: str) -> bool:
-    """a と b が同じファイルを指すか（実パスが同じ、または既存なら同じ (st_dev, st_ino)。ハードリンクも検出する）。"""
+    """Whether a and b point to the same file (same real path, or the same (st_dev, st_ino) if they exist; detects hard links too)."""
     if os.path.realpath(a) == os.path.realpath(b):
         return True
     try:
         return os.path.samefile(a, b)
-    except OSError:  # どちらかが存在しない
+    except OSError:  # One of them does not exist
         return False
 
 
 def _check_output(path: str, input_path: str) -> None:
-    """変更を始める前に -o の出力先を検証する（書けないと分かっている出力先で apply しない）。
+    """Checks the -o output path before any change starts (never apply with an output path known to be unwritable).
 
-    os.replace で置き換えるため、監査ログ（とそのディレクトリ内のファイル）や入力ファイルは指定できない。
-    既存のパスは通常ファイルに限る（シンボリックリンク・FIFO・ソケット・デバイスは置き換えずに拒否する）。
+    The output is replaced with os.replace, so the audit log (and files in its directory) and the input file cannot be given.
+    An existing path must be a regular file (symbolic links, FIFOs, sockets and devices are rejected, not replaced).
     """
-    if not path or path.endswith("/"):  # abspath は "" を cwd に、末尾の / を落として解釈してしまう
-        raise ValueError(f"-o にはファイルのパスを指定してください（空のパス・末尾が / のパスは不可）: {path!r}")
+    if not path or path.endswith("/"):  # abspath would read "" as cwd and drop a trailing /
+        raise ValueError(f"-o needs a file path (an empty path or a path ending in / is not allowed): {path!r}")
     try:
         st = os.lstat(path)
     except FileNotFoundError:
         st = None
-    except OSError as e:  # 途中の要素がファイル（ENOTDIR）など
-        raise ValueError(f"-o の出力先を確認できません: {path}（{e.strerror}）") from None
+    except OSError as e:  # An intermediate element is a file (ENOTDIR) and so on
+        raise ValueError(f"cannot check the -o output path: {path} ({e.strerror})") from None
     if st is not None and stat.S_ISDIR(st.st_mode):
-        raise ValueError(f"-o にディレクトリは指定できません: {path}")
-    if st is not None and stat.S_ISLNK(st.st_mode):  # os.replace はリンク先ではなくリンク自体を置き換えるため拒否する
-        raise ValueError(f"-o にシンボリックリンクは指定できません: {path}")
-    if st is not None and not stat.S_ISREG(st.st_mode):  # FIFO・ソケット・デバイス（/dev/null など）を置き換えない
-        raise ValueError(f"-o に通常ファイル以外は指定できません: {path}")
-    d = os.path.dirname(path) or "."  # 与えられたパスのままの親（abspath で .. などを畳まない）
+        raise ValueError(f"-o cannot be a directory: {path}")
+    if st is not None and stat.S_ISLNK(st.st_mode):  # os.replace replaces the link itself, not its target, so reject it
+        raise ValueError(f"-o cannot be a symbolic link: {path}")
+    if st is not None and not stat.S_ISREG(st.st_mode):  # Never replace FIFOs, sockets, devices (/dev/null and so on)
+        raise ValueError(f"-o must be a regular file: {path}")
+    d = os.path.dirname(path) or "."  # The parent of the path as given (abspath would collapse .. and so on)
     if not os.path.isdir(d):
-        raise ValueError(f"-o の出力先ディレクトリがありません: {d}")
+        raise ValueError(f"the -o output directory does not exist: {d}")
     if not os.access(d, os.W_OK | os.X_OK):
-        raise ValueError(f"-o の出力先ディレクトリに書き込めません: {d}")
+        raise ValueError(f"cannot write to the -o output directory: {d}")
     if _same_path(path, str(audit.log_path())):
-        raise ValueError(f"-o に監査ログは指定できません: {path}")
+        raise ValueError(f"-o cannot be the audit log: {path}")
     if any(_same_path(x, str(audit.log_dir())) for x in (d, os.path.dirname(os.path.realpath(path)))):
-        raise ValueError(f"-o に監査ログのディレクトリ内のファイルは指定できません: {path}")
+        raise ValueError(f"-o cannot be a file in the audit log directory: {path}")
     if _same_path(path, input_path):
-        raise ValueError(f"-o に入力ファイルは指定できません: {path}")
+        raise ValueError(f"-o cannot be the input file: {path}")
 
 
 def _output_clash(path: str, steps) -> str | None:
-    """-o が計画の対象（変更するファイル・隔離するツリーの中）と同じなら理由を返す。対象は入力を読んだ後にしか分からない。"""
+    """Returns a reason if -o is the same as a plan target (a file to change, or inside a tree to quarantine). Targets are known only after reading the input."""
     try:
         st = os.stat(path)
         ino = (st.st_dev, st.st_ino)
     except OSError:
         ino = None
     real = os.path.realpath(path)
-    # 出力先ディレクトリやその上位を変更すると apply 後に remediation-log を書けなくなる
+    # Changing the output directory or a directory above it would make remediation-log unwritable after apply
     dir_paths, dir_ino = with_ancestors(os.path.dirname(path) or ".")
     for s in steps:
         if s.type not in FS_CHANGING or s.target is None:
@@ -182,16 +182,16 @@ def _output_clash(path: str, steps) -> str | None:
             idents.append(tuple(m[2][:2]))
         for t in paths:
             if t in dir_paths:
-                return f"-o の出力先ディレクトリやその上位ディレクトリは計画の対象にできません（{t}）"
+                return f"the -o output directory or a directory above it cannot be a plan target ({t})"
             if real == t or fsutil.is_under(real, t) or ino in idents:
-                return f"-o に計画の対象は指定できません（{t}）"
+                return f"-o cannot be a plan target ({t})"
         if any(i in dir_ino for i in idents):
-            return f"-o の出力先ディレクトリやその上位ディレクトリは計画の対象にできません（{s.target}）"
+            return f"the -o output directory or a directory above it cannot be a plan target ({s.target})"
     return None
 
 
 def _print_followups(plan: dict, results: list[dict]) -> None:
-    """apply の後に残る手作業（checklist と followup）を表示する（入力由来の文字列はエスケープ）。"""
+    """Shows the manual work left after apply (checklists and followups; strings from input are escaped)."""
     by = {it["finding_id"]: it for it in plan["items"]}
     shown = set()
     for r in results:
@@ -205,26 +205,26 @@ def _print_followups(plan: dict, results: list[dict]) -> None:
             if key in shown or (r["result"] == "skipped" and r["reason"] != "already_compliant"):
                 continue
             shown.add(key)
-            _err(f"  [手作業] {cl['template']} {r['finding_id'][:19]}… {a['target'] or '(path なし)'}")
+            _err(f"  [manual] {cl['template']} {r['finding_id'][:19]}... {a['target'] or '(no path)'}")
             for st in cl["steps"]:
                 _err(f"    {cl['template']}:{st['id']}{' *' if st['blocking'] else ''} {st['text']}")
     if shown:
-        _err("  （* は必須。完了したら ger confirm --item <finding_id> --step <template>:<id> で記録する）")
+        _err("  (* = required. When done, record it with ger confirm --item <finding_id> --step <template>:<id>)")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    audit.configure()  # GER_LOG_DIR をここで一度だけ実パスに解決し、以後のログの読み書きはそのパスで行う
+    audit.configure()  # Resolve GER_LOG_DIR to a real path once here; every later log read and write uses that path
     store.configure()
     if args.command == "verify-log":
         return _verify_log(args.log)
     if args.command == "quarantine-list":
         return _quarantine_list(args)
     if not _PERSON.fullmatch(args.operator):
-        _err("ger: --operator の形式が不正です")
+        _err("ger: invalid --operator format")
         return EXIT_USAGE
     if args.now and os.environ.get("GER_ALLOW_NOW_OVERRIDE") != "1":
-        _err("ger: --now はテスト専用です（GER_ALLOW_NOW_OVERRIDE=1 のときだけ受け付けます）")
+        _err("ger: --now is for tests only (accepted only when GER_ALLOW_NOW_OVERRIDE=1)")
         return EXIT_USAGE
     try:
         now = now_utc(args.now)
@@ -240,29 +240,29 @@ def main(argv: list[str] | None = None) -> int:
     try:
         audit.ensure_writable()
     except OSError as e:
-        _err(f"ger: {e}（記録できないため実行しません）")
+        _err(f"ger: {e} (not running because nothing could be recorded)")
         return EXIT_USAGE
 
     clock = (lambda: now) if args.now else now_utc
     record = {"command": args.command, "operator": args.operator, "started_at": fmt_ts(clock())}
-    if args.now:  # --now 付きの dry-run 記録は --now なしの apply の根拠にしない（G-8）
+    if args.now:  # A dry-run record made with --now never justifies an apply without --now (G-8)
         record["now_override"] = True
     st = {"code": EXIT_OK, "rejections": [], "log_obj": None, "changed": False, "outcome": None, "result": None,
           "out_obj": None}
     try:
         inp = load_json(args.input)
     except (OSError, ValueError) as e:
-        _err(f"ger: 入力を読めません: {e}")
+        _err(f"ger: cannot read the input: {e}")
         inp = None
-        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-1", f"入力を JSON として読めません: {e}")])
+        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-1", f"cannot read the input as JSON: {e}")])
     pool = fsutil.FdPool()
     if inp is not None:
         try:
             handler = {"preview": _cmd_preview, "restore": _cmd_restore, "confirm": _cmd_confirm,
                        "recover": _cmd_recover}.get(args.command, _cmd_plan)
             handler(args, inp, now, clock, ttl, max_age, record, st, pool)
-        except Exception as e:  # 想定外は fail-closed
-            _err(f"ger: 内部エラー: {type(e).__name__}: {str(e)[:200]}")
+        except Exception as e:  # Anything unexpected fails closed
+            _err(f"ger: internal error: {type(e).__name__}: {str(e)[:200]}")
             st["code"] = EXIT_INTERNAL
         finally:
             pool.close()
@@ -274,7 +274,7 @@ def _finish(args, record: dict, st: dict, clock) -> int:
     result = st["result"]
     unlogged = False
     if rejections:
-        _err(f"ger {args.command}: 拒否 {len(rejections)} 件（何も変更していません）")
+        _err(f"ger {args.command}: rejections: {len(rejections)} (nothing changed)")
         for r in rejections:
             fid = f" [{r.finding_id}]" if r.finding_id else ""
             _err(f"  {r.gate}{fid}: {r.message}")
@@ -282,24 +282,24 @@ def _finish(args, record: dict, st: dict, clock) -> int:
     out_obj = st["out_obj"] if st["out_obj"] is not None else log_obj
     if log_obj is not None:
         errs = validator("remediation-log.schema.json").errors(log_obj)
-        if errs:  # 自分の出力が契約に合わない場合も fail-closed
-            _err(f"ger: 出力が remediation-log スキーマに不適合: {errs[0]}")
+        if errs:  # Fail closed also when our own output breaks the contract
+            _err(f"ger: output does not conform to the remediation-log schema: {errs[0]}")
             code = EXIT_INTERNAL if code == EXIT_OK else code
     if out_obj is not None:
-        # 監査ログより先に書き出す。書けなければ output_hash を記録せず、成功（ok）としても記録しない
+        # Written before the audit log. If it cannot be written, output_hash is not recorded and the run is not recorded as ok
         try:
             write_atomic(args.output, out_obj)
             record["output_hash"] = sha256(canonical(out_obj))
         except OSError as e:
-            _err(f"ger: 出力を書き出せません（{e}）")
+            _err(f"ger: cannot write the output ({e})")
             unlogged = changed
             _remove_stale_output(args.output)
             if changed:
-                if outcome is None:  # 全件適用した（ロールバックはしていない）。rollback_failed とは記録しない
+                if outcome is None:  # Everything was applied (no rollback). Not recorded as rollback_failed
                     result = "applied_unlogged"
                 code = EXIT_ROLLBACK_FAILED
-                _err(f"ger {args.command}: 変更を適用した可能性がありますが remediation-log を残せませんでした。"
-                     "監査ログと対象の権限を確認して手動で対応してください")
+                _err(f"ger {args.command}: the changes may have been applied, but remediation-log could not be written. "
+                     "Check the audit log and the permissions of the targets and resolve this by hand")
             elif code == EXIT_OK:
                 code = EXIT_USAGE
     result = result or {EXIT_OK: "ok", EXIT_REJECTED: "rejected", EXIT_ROLLED_BACK: "rolled_back",
@@ -308,14 +308,14 @@ def _finish(args, record: dict, st: dict, clock) -> int:
     try:
         audit.append(record)
     except OSError as e:
-        _err(f"ger: 監査ログに記録できません（{e}）")
-        # apply は既に変更している可能性があるため要手動対応として扱う
+        _err(f"ger: cannot record in the audit log ({e})")
+        # apply may already have changed things, so this requires manual action
         mutating = args.command in ("apply", "restore", "recover")
         return EXIT_ROLLBACK_FAILED if mutating and code != EXIT_REJECTED else EXIT_USAGE
     if unlogged:
-        return code  # remediation-log を書けなかった旨は表示済み
-    msg = {EXIT_OK: "OK", EXIT_ROLLED_BACK: "失敗したため全件ロールバックしました",
-           EXIT_ROLLBACK_FAILED: "失敗し、ロールバックも完了できませんでした。remediation-log を確認して手動で対応してください"}.get(code)
+        return code  # The failure to write remediation-log was already shown
+    msg = {EXIT_OK: "OK", EXIT_ROLLED_BACK: "failed; everything was rolled back",
+           EXIT_ROLLBACK_FAILED: "failed, and the rollback could not be completed. Check remediation-log and resolve this by hand"}.get(code)
     if msg:
         _err(f"ger {args.command}: {msg}")
     return code
@@ -341,8 +341,8 @@ def _cmd_plan(args, inp, now, clock, ttl, max_age, record, st, pool):
     clash = None if rejections or args.command == "verify" else _output_clash(args.output, steps)
     if rejections:
         st.update(code=EXIT_REJECTED, rejections=rejections)
-    elif clash:  # 変更を始める前に止める（ゲートの拒否ではなく引数エラーとして記録する）
-        _err(f"ger: {clash}（何も変更していません）")
+    elif clash:  # Stop before any change starts (recorded as an argument error, not a gate rejection)
+        _err(f"ger: {clash} (nothing changed)")
         record["error"] = clash
         st["code"] = EXIT_USAGE
     elif args.command == "dry-run":
@@ -362,7 +362,7 @@ def _cmd_plan(args, inp, now, clock, ttl, max_age, record, st, pool):
 
 
 def _audit_item(step, r) -> dict:
-    """監査ログの item ごとの記録。内容は残さず、ハッシュ・実体 ID・隔離 ID だけ（§4.5）。"""
+    """Per-item record for the audit log. No contents, only hashes, object IDs and quarantine IDs (§4.5)."""
     a = step.audit()
     rec = {"finding_id": r["finding_id"], "type": step.type, "target": step.target, "result": r["result"],
            "before": r["before"], "after": r["after"]}
@@ -376,7 +376,7 @@ def _audit_item(step, r) -> dict:
 
 # --- preview ------------------------------------------------------------------------------------
 def _cmd_preview(args, inp, now, clock, ttl, max_age, record, st, pool):
-    """下書き plan の action の params を、現在のファイルの内容から埋める（読むだけ）。"""
+    """Fills the params of the draft plan's actions from the current file contents (read only)."""
     plan = inp
     errs = validator("vendor/remediation-plan.schema.json").errors(plan) if isinstance(plan, dict) else ["not an object"]
     if errs:
@@ -392,7 +392,7 @@ def _cmd_preview(args, inp, now, clock, ttl, max_age, record, st, pool):
     try:
         ctx.store_dev = store.device()
     except (OSError, store.StoreError) as e:
-        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-9", f"隔離ストアを用意できません（{e}）")])
+        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-9", f"cannot prepare the quarantine store ({e})")])
         return
     bad = 0
     for grp in _groups(items):
@@ -401,15 +401,15 @@ def _cmd_preview(args, inp, now, clock, ttl, max_age, record, st, pool):
         fids = [it["finding_id"] for it in its]
         try:
             if a0["type"] not in REGISTRY:
-                raise ActionError(f"操作 {a0['type']} は GER 未対応です")
+                raise ActionError(f"operation {a0['type']} is not supported by GER")
             if any(it["action"]["type"] != a0["type"] or it["action"]["target"] != a0["target"] for it in its):
-                raise ActionError("同じ group の item の type / target が一致しません")
+                raise ActionError("type / target differ between items of the same group")
             t = a0["target"]
             if a0["type"] in FS_CHANGING:
                 if t is None:
-                    raise ActionError("ファイルを変える操作の target は null にできません")
+                    raise ActionError("the target of an operation that changes files cannot be null")
                 if not scope or not in_scope(t, scope):
-                    raise ActionError("G-9: 対象が plan.scope（承認する検査範囲）の外にあります")
+                    raise ActionError("G-9: the target is outside plan.scope (the scan scope to approve)")
                 why = protected_reason(t)
                 if why:
                     raise ActionError(f"G-9: {why}")
@@ -425,8 +425,8 @@ def _cmd_preview(args, inp, now, clock, ttl, max_age, record, st, pool):
         except FileNotFoundError:
             bad += 1
             report.append({"finding_ids": fids, "type": a0["type"], "target": a0["target"], "status": "rejected",
-                           "reason": "対象が存在しません"})
-            _err(f"ger preview: NG   {a0['type']} {a0['target']}: 対象が存在しません")
+                           "reason": "the target does not exist"})
+            _err(f"ger preview: NG   {a0['type']} {a0['target']}: the target does not exist")
         except (ActionError, fsutil.FsError, OSError, ValueError) as e:
             bad += 1
             report.append({"finding_ids": fids, "type": a0["type"], "target": a0["target"], "status": "rejected",
@@ -438,7 +438,7 @@ def _cmd_preview(args, inp, now, clock, ttl, max_age, record, st, pool):
         try:
             write_atomic(args.report, {"plan_id": out.get("plan_id"), "items": report})
         except OSError as e:
-            _err(f"ger: --report を書き出せません（{e}）")
+            _err(f"ger: cannot write --report ({e})")
     if bad:
         st["code"] = EXIT_REJECTED
         st["result"] = "partial"
@@ -465,7 +465,7 @@ def _cmd_restore(args, inp, now, clock, ttl, max_age, record, st, pool):
         return
     clash = _restore_clash(args.output, steps)
     if clash:
-        _err(f"ger: {clash}（何も変更していません）")
+        _err(f"ger: {clash} (nothing changed)")
         record["error"] = clash
         st["code"] = EXIT_USAGE
         return
@@ -476,12 +476,12 @@ def _cmd_restore(args, inp, now, clock, ttl, max_age, record, st, pool):
         return
     broken = audit.verify_chain()
     if broken:
-        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-8", f"監査ログのハッシュチェーンが壊れています（{broken[0]}）")])
+        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-8", f"the hash chain of the audit log is broken ({broken[0]})")])
         return
     if audit.find_dry_run(tok, record["input_hash"], now, ttl, bool(args.now), dry_cmd="restore-dry-run",
                           apply_cmd="restore-apply") is None:
         st.update(code=EXIT_REJECTED,
-                  rejections=[Rejection("G-8", f"同一の restore-request の dry-run 成功記録が {ttl} 秒以内にありません")])
+                  rejections=[Rejection("G-8", f"no successful dry-run record of the same restore-request within {ttl} seconds")])
         return
     results, ok = restore_mod.run(steps, req["restore_id"], fmt_ts(clock()))
     st["changed"] = ok is not False
@@ -495,7 +495,7 @@ def _restore_clash(path: str, steps) -> str | None:
     real = os.path.realpath(path)
     for s in steps:
         if fsutil.is_under(real, s.target):
-            return f"-o に戻し先（{s.target}）やその中は指定できません"
+            return f"-o cannot be a restore destination ({s.target}) or inside one"
     return None
 
 
@@ -516,22 +516,22 @@ def _cmd_confirm(args, inp, now, clock, ttl, max_age, record, st, pool):
     cl = next((c for c in lists if c["template"] == tmpl), None)
     step = next((s for s in cl["steps"] if s["id"] == sid), None) if cl else None
     if step is None:
-        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-1", f"item {args.item} に手順 {args.step} がありません", args.item)])
+        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-1", f"item {args.item} has no step {args.step}", args.item)])
         return
     ph = plan_hash(plan)
     recs = audit.records()
     if not any(r.get("command") == "apply" and r.get("plan_hash") == ph and r.get("result") == "ok" for r in recs):
-        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-8", "この計画の apply の成功記録がありません（確認は apply の後に記録する）")])
+        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-8", "no successful apply record for this plan (confirmations are recorded after apply)")])
         return
     if any(r.get("command") == "confirm" and r.get("plan_hash") == ph and r.get("finding_id") == args.item
            and r.get("step") == args.step and r.get("result") == "ok" for r in recs):
-        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-1", f"手順 {args.step} は既に確認済みです", args.item)])
+        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-1", f"step {args.step} is already confirmed", args.item)])
         return
     verify = a["params"].get("verify", {}).get("kind") if a["type"] == "checklist" and cl is a["params"] else None
     vr = "self_attested"
     if verify == "path_absent" and a["target"]:
         if os.path.lexists(a["target"]):
-            st.update(code=EXIT_REJECTED, rejections=[Rejection("G-7", f"verify path_absent: まだ存在します: {a['target']}", args.item)])
+            st.update(code=EXIT_REJECTED, rejections=[Rejection("G-7", f"verify path_absent: still exists: {a['target']}", args.item)])
             return
         vr = "verified:path_absent"
     elif verify == "file_hash_changed" and a["target"]:
@@ -545,12 +545,12 @@ def _cmd_confirm(args, inp, now, clock, ttl, max_age, record, st, pool):
         except (OSError, fsutil.FsError):
             cur = None
         if cur is not None and cur == ev:
-            st.update(code=EXIT_REJECTED, rejections=[Rejection("G-7", "verify file_hash_changed: 内容が検知時から変わっていません", args.item)])
+            st.update(code=EXIT_REJECTED, rejections=[Rejection("G-7", "verify file_hash_changed: the content has not changed since detection", args.item)])
             return
         vr = "verified:file_hash_changed"
     record.update(template=tmpl, verify_result=vr, blocking=step["blocking"])
-    _err(f"ger confirm: {args.step} を記録しました（{vr}。外部の作業は本人の確認として記録し、GER は検証していません）"
-         if vr == "self_attested" else f"ger confirm: {args.step} を記録しました（{vr}）")
+    _err(f"ger confirm: recorded {args.step} ({vr}; external work is recorded as the person's own confirmation, GER has not verified it)"
+         if vr == "self_attested" else f"ger confirm: recorded {args.step} ({vr})")
 
 
 # --- recover ------------------------------------------------------------------------------------
@@ -599,7 +599,7 @@ def _cmd_recover(args, inp, now, clock, ttl, max_age, record, st, pool):
         if not failed:
             store.append_journal(run_id, {"event": "recovered", "operator": args.operator})
     if not found:
-        _err("ger recover: この計画・入力の未完了のジャーナルはありません")
+        _err("ger recover: no unfinished journal for this plan and input")
     st["changed"] = bool(results)
     st["code"] = EXIT_ROLLBACK_FAILED if failed else EXIT_OK
     st["outcome"] = executor.ROLLBACK_FAILED if failed else None
@@ -615,24 +615,24 @@ def _quarantine_list(args) -> int:
     if args.json:
         print(json.dumps({"store": store.store_dir(), "entries": ents}, ensure_ascii=True, indent=2, sort_keys=True))
     else:
-        _err(f"隔離ストア: {store.store_dir()}（{len(ents)} 件）")
+        _err(f"quarantine store: {store.store_dir()} (entries: {len(ents)})")
         for e in ents:
             _err(f"  {e['quarantine_id']}  {e.get('status')}  {e.get('operation')}  {e.get('original_path')}  {e.get('manifest_sha256')}")
     return EXIT_OK
 
 
 def _remove_stale_output(path: str) -> None:
-    """書き出しに失敗したとき、以前の実行の remediation-log が今回のものと取り違えられないよう消す。
+    """When writing fails, removes the remediation-log of an earlier run so it cannot be mistaken for this run's.
 
-    出力先は _check_output で通常ファイル（または未作成）と確認済みで、成功していれば置き換えていたもの。
+    _check_output already confirmed the output path is a regular file (or does not exist yet); on success it would have been replaced.
     """
     try:
         os.unlink(path)
-        _err(f"ger: 以前の remediation-log を削除しました: {path}")
+        _err(f"ger: removed the earlier remediation-log: {path}")
     except FileNotFoundError:
         pass
     except OSError as e:
-        _err(f"ger: 以前の remediation-log を削除できません。今回の実行の記録ではありません: {path}（{e}）")
+        _err(f"ger: cannot remove the earlier remediation-log; it is not the record of this run: {path} ({e})")
 
 
 def _log(inp: dict, mode: str, started_at: str, finished, results: list[dict], status: str) -> dict:

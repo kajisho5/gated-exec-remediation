@@ -1,4 +1,4 @@
-"""GER のテスト。一時ディレクトリの実ファイルに対して chmod を検証する。標準ライブラリの unittest のみ。"""
+"""GER tests. Checks chmod against real files in a temporary directory. Standard library unittest only."""
 from __future__ import annotations
 
 import copy
@@ -28,7 +28,7 @@ FID = ["sha256:" + hashlib.sha256(str(i).encode()).hexdigest() for i in range(5)
 
 
 def setUpModule():
-    os.environ["GER_ALLOW_NOW_OVERRIDE"] = "1"  # テストでは --now を使う
+    os.environ["GER_ALLOW_NOW_OVERRIDE"] = "1"  # The tests use --now
 
 
 def tearDownModule():
@@ -130,12 +130,12 @@ class TestVendorAndCompat(Base):
     def test_zet_finalized_plan_is_compatible(self):
         plan = json.loads((FIX / "zet-final-plan.json").read_text())
         self.assertEqual(validator("vendor/remediation-plan.schema.json").errors(plan), [])
-        self.assertEqual(plan_hash(plan), plan["plan_hash"], "plan_hash の定義が ZET と一致しません")
+        self.assertEqual(plan_hash(plan), plan["plan_hash"], "the plan_hash definition does not match ZET")
 
     def test_zet_plan_11_passes_schema_and_reverified_invariants(self):
-        # ZET 0.2 の finalize の実出力（plan 1.1: scope / relation / finding_path / group / evidence / followup、
-        # checklist、ger preview が埋めた params）。ZES の chaindrop フィクスチャの E2E で作り、パスを /srv/zes-fixtures に
-        # 置き換えて plan_hash を計算し直したもの
+        # Actual output of ZET 0.2 finalize (plan 1.1: scope / relation / finding_path / group / evidence / followup,
+        # checklist, params filled by ger preview). Made with the E2E of the ZES chaindrop fixture, with paths replaced
+        # by /srv/zes-fixtures and plan_hash recomputed
         plan = json.loads((FIX / "zet-final-plan-11.json").read_text())
         self.assertEqual(plan["schema_version"], "1.1")
         self.assertEqual(validator("vendor/remediation-plan.schema.json").errors(plan), [])
@@ -149,8 +149,8 @@ class TestVendorAndCompat(Base):
         self.assertTrue(any(it["action"] and it["action"].get("followup") for it in plan["items"]))
 
     def test_zet_r3_finalized_plan_passes_reverified_invariants(self):
-        # ZET（round 3 以降）の finalize の実出力: items[].skillpact と action.evidence_hash を持つ。
-        # G-1 で再検査する ZET の不変条件に、正しく作られた計画が引っかからないこと
+        # Actual output of ZET finalize (round 3 and later): has items[].skillpact and action.evidence_hash.
+        # A correctly built plan must not trip the ZET invariants checked again by G-1
         plan = json.loads((FIX / "zet-final-plan-r3.json").read_text())
         self.assertEqual(validator("vendor/remediation-plan.schema.json").errors(plan), [])
         self.assertEqual(plan_hash(plan), plan["plan_hash"])
@@ -166,7 +166,7 @@ class TestVendorAndCompat(Base):
         try:
             from jsonschema import Draft202012Validator
         except ImportError:
-            self.skipTest("jsonschema 未導入（開発依存）")
+            self.skipTest("jsonschema not installed (development dependency)")
         inp = self.ger_input()
         bad = copy.deepcopy(inp); bad["allowed_actions"] = ["*"]
         bad2 = copy.deepcopy(inp); bad2["findings"] = {}
@@ -186,7 +186,7 @@ class TestGates(Base):
         code, err = self.ger(command, inp, **kw)
         self.assertEqual(code, 3, err)
         self.assertIn(gate, err)
-        self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "拒否時に変更されています")
+        self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "changed although rejected")
 
     def test_verify_ok(self):
         self.assertEqual(self.ger("verify", self.ger_input())[0], 0)
@@ -202,13 +202,13 @@ class TestGates(Base):
     def test_g2_draft_rejected(self):
         p = self.plan(); p["status"] = "draft"; del p["plan_hash"]
         inp = self.ger_input(plan=p)
-        self.assertRejected(inp, "G-2")  # 下書き（status: draft）は確定 plan ではない
+        self.assertRejected(inp, "G-2")  # A draft (status: draft) is not a finalized plan
         p = self.plan(status="error")
         self.assertRejected(self.ger_input(plan=p), "G-2")
 
     def test_g3_approval_binding(self):
         inp = self.ger_input()
-        inp["plan"]["items"][0]["action"]["target"] = str(self.d / "other")  # 承認後の差し替え
+        inp["plan"]["items"][0]["action"]["target"] = str(self.d / "other")  # Replaced after approval
         self.assertRejected(inp, "G-3")
         inp = self.ger_input(); inp["approval"]["plan_id"] = "99999999-2222-4333-8444-555555555555"
         self.assertRejected(inp, "G-3")
@@ -226,7 +226,7 @@ class TestGates(Base):
         p["plan_hash"] = plan_hash(p)
         code, err = self.ger("verify", self.ger_input(plan=p, approvers=("alice", "ALICE")))
         self.assertEqual(code, 3, err)
-        self.assertIn("承認者 2 名以上", err)
+        self.assertIn("2 or more approvers", err)
 
     def test_g5_allowlist_and_unsupported(self):
         self.assertRejected(self.ger_input(allowed=()), "G-5")
@@ -242,14 +242,14 @@ class TestGates(Base):
         self.assertRejected(self.ger_input(plan=p), "G-6")
 
     def test_g6_risky_effects_need_explicit_action(self):
-        # SkillPact 0.8: exec / network / spend / send を宣言したスキルへの操作は allowed_actions に明示が必要
+        # SkillPact 0.8: an operation on a skill that declares exec / network / spend / send must be listed explicitly in allowed_actions
         for eff, risky in (("exec", True), ("network", True), ("spend", True), ("send", True), ("read", False), ("write", False)):
             p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = [eff]
-            p["items"][0]["approved_by"] = ["security-lead", "platform-owner"]  # ZET I-6: 危険な効果の remediate は 2 名
+            p["items"][0]["approved_by"] = ["security-lead", "platform-owner"]  # ZET I-6: remediate with risky effects needs 2
             p["plan_hash"] = plan_hash(p)
             code, err = self.ger("verify", self.ger_input(plan=p, allowed=(), approvers=("security-lead", "platform-owner")))
             self.assertEqual(code, 3, err)
-            self.assertEqual(f"{eff} を宣言したスキルへの操作" in err, risky, eff)
+            self.assertEqual(f"an operation on a skill that declares {eff}" in err, risky, eff)
         p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = ["read", "write", "network", "exec", "spend", "send"]
         p["items"][0]["approved_by"] = ["security-lead", "platform-owner"]
         p["plan_hash"] = plan_hash(p)
@@ -259,34 +259,34 @@ class TestGates(Base):
         link = self.d / "link"; link.symlink_to(self.targets[0])
         self.assertRejected(self.ger_input(plan=self.plan([link])), "G-7")
         self.assertRejected(self.ger_input(plan=self.plan([self.d / "missing"])), "G-7")
-        self.assertRejected(self.ger_input(plan=self.plan([Path(str(self.d) + "/sub/../key0")])), "I-4")  # G-1（ZET I-4 相当）
+        self.assertRejected(self.ger_input(plan=self.plan([Path(str(self.d) + "/sub/../key0")])), "I-4")  # G-1 (ZET I-4 equivalent)
         self.assertRejected(self.ger_input(plan=self.plan([self.targets[0], self.targets[0]])), "G-7")
         sub = self.d / "realdir"; sub.mkdir(); (sub / "f").write_text("x")
         (self.d / "dirlink").symlink_to(sub)
         self.assertRejected(self.ger_input(plan=self.plan([self.d / "dirlink" / "f"])), "G-7")
         p = self.plan(); p["items"][0]["action"]["params"] = {"mode": "4755"}; p["plan_hash"] = plan_hash(p)
-        self.assertRejected(self.ger_input(plan=p), "G-1")  # params は G-1（actions.schema.json）で検証する
+        self.assertRejected(self.ger_input(plan=p), "G-1")  # params are validated by G-1 (actions.schema.json)
         fifo = self.d / "fifo"; os.mkfifo(fifo)
         self.assertRejected(self.ger_input(plan=self.plan([fifo])), "G-7")
 
     def test_g7_audit_log_and_its_directories_rejected(self):
-        # 監査ログ・そのディレクトリ・その上位ディレクトリを chmod すると、apply 後に記録できなくなる
+        # A chmod of the audit log, its directory or a directory above it would make recording impossible after apply
         self.assertEqual(self.ger("dry-run", self.ger_input())[0], 0)
         hl = self.d / "audit-hardlink"; os.link(audit.log_path(), hl)
         for t in (audit.log_path(), hl, audit.log_dir(), self.d):
             code, err = self.ger("verify", self.ger_input(plan=self.plan([t])))
             self.assertEqual(code, 3, (t, err))
-            self.assertIn("G-7", err); self.assertIn("監査ログ", err)
+            self.assertIn("G-7", err); self.assertIn("audit log", err)
         self.assertEqual(stat.S_IMODE(os.stat(audit.log_dir()).st_mode), 0o700)
 
     def test_g1_duplicate_finding_id(self):
         p = self.plan(); p["items"][1]["finding_id"] = FID[0]; p["plan_hash"] = plan_hash(p)
         code, err = self.ger("verify", self.ger_input(plan=p))
         self.assertEqual(code, 3, err)
-        self.assertIn("G-1", err); self.assertIn("finding_id が重複", err)
+        self.assertIn("G-1", err); self.assertIn("finding_id is duplicated", err)
 
     def test_g1_duplicate_finding_id_check_is_linear(self):
-        # 重複検査が O(n^2)（list.count）だと 20000 件で数秒かかる。スキーマ検証を外し、G-2 で止めて重複検査だけを測る
+        # With an O(n^2) duplicate check (list.count), 20000 items take seconds. Skip schema validation, stop at G-2 and time only the duplicate check
         item = self.plan()["items"][0]
         items = [dict(item, finding_id="sha256:%064x" % i) for i in range(20000)]
         items.append(dict(item, finding_id="sha256:%064x" % 7))
@@ -298,7 +298,7 @@ class TestGates(Base):
             rej, _ = gates.check_gates(inp, "ops", now_utc(NOW), "verify", 86400)
             elapsed = time.monotonic() - t0
         self.assertEqual([(r.gate, r.finding_id) for r in rej], [("G-1", "sha256:%064x" % 7)])
-        self.assertLess(elapsed, 2.5)  # 修正前は約 5 秒。CI の遅いランナーでも誤検知しない上限
+        self.assertLess(elapsed, 2.5)  # About 5 seconds before the fix. An upper bound that slow CI runners do not trip
 
     def test_g1_invalid_calendar_timestamps(self):
         inp = self.ger_input(); inp["approval"]["approved_at"] = "2026-02-30T11:00:00Z"
@@ -306,7 +306,7 @@ class TestGates(Base):
         p = self.plan(created_at="2026-10-22T25:00:00Z")
         code, err = self.ger("verify", self.ger_input(plan=p))
         self.assertEqual(code, 3, err)
-        self.assertIn("plan.created_at が実在しない日時です", err)
+        self.assertIn("plan.created_at is not a valid date and time", err)
 
     def test_g8_unparseable_dry_run_record_is_ignored(self):
         inp = self.ger_input(mode="apply")
@@ -321,10 +321,10 @@ class TestGates(Base):
         hl = self.d / "hardlink"; os.link(self.targets[0], hl)
         code, err = self.ger("verify", self.ger_input(plan=self.plan([self.targets[0], hl])))
         self.assertEqual(code, 3, err)
-        self.assertIn("G-7", err); self.assertIn("ハードリンク", err)
+        self.assertIn("G-7", err); self.assertIn("hard link", err)
 
     def test_trailing_newline_rejected_by_patterns(self):
-        # Python の $ は末尾の改行の直前にも一致する。"ops\n" で G-4（自己承認防止）を回避できないこと
+        # Python's $ also matches right before a trailing newline. "ops\n" must not get around G-4 (no self-approval)
         self.assertRejected(self.ger_input(approvers=("ops\n",)), "G-1", operator="ops")
         self.assertRejected(self.ger_input(approvers=("ops\n",)), "G-1", command="dry-run", operator="ops")
         inp = self.ger_input(); inp["approval"]["plan_id"] += "\n"
@@ -335,7 +335,7 @@ class TestGates(Base):
 
     def test_g1_lone_surrogate_and_non_finite(self):
         inp = json.dumps(self.ger_input())
-        for bad, why in ((inp.replace('"security-lead"', '"\\udc80"'), "サロゲート"), (inp[:-1] + ', "x": 1e400}', "有限でない")):
+        for bad, why in ((inp.replace('"security-lead"', '"\\udc80"'), "surrogate"), (inp[:-1] + ', "x": 1e400}', "non-finite")):
             code, err = self.run_cli("verify", self.write_raw(bad), "--operator", "ops", "--now", NOW)
             self.assertEqual(code, 3, err)
             self.assertIn("G-1", err); self.assertIn(why, err)
@@ -350,15 +350,15 @@ class TestGates(Base):
         self.assertNotEqual(dup, inp)
         code, err = self.run_cli("verify", self.write_raw(dup), "--operator", "ops", "--now", NOW)
         self.assertEqual(code, 3, err)
-        self.assertIn("G-1", err); self.assertIn("重複", err)
+        self.assertIn("G-1", err); self.assertIn("duplicate key", err)
 
     def test_g1_deep_nesting_rejected(self):
         inp = json.dumps(self.ger_input())
-        for depth in (100, 200000):  # 200000 は json.loads 自体が RecursionError になる深さ
+        for depth in (100, 200000):  # 200000 is deep enough for json.loads itself to raise RecursionError
             deep = inp[:-1] + ', "x": ' + "[" * depth + "]" * depth + "}"
             code, err = self.run_cli("verify", self.write_raw(deep), "--operator", "ops", "--now", NOW)
             self.assertEqual(code, 3, err)
-            self.assertIn("G-1", err); self.assertIn("入れ子が深すぎます", err)
+            self.assertIn("G-1", err); self.assertIn("nesting is too deep", err)
 
     def test_g8_apply_requires_dry_run(self):
         self.assertRejected(self.ger_input(mode="apply"), "G-8", command="apply")
@@ -379,7 +379,7 @@ class TestGates(Base):
         inp = self.ger_input()
         self.assertEqual(self.ger("dry-run", inp)[0], 0)
         self.assertEqual(self.ger("verify", inp)[0], 0)
-        self.assertEqual(self.ger("verify", inp)[0], 0)  # 末尾の連結は健全なまま、途中だけを壊す
+        self.assertEqual(self.ger("verify", inp)[0], 0)  # The link at the end stays intact; only the middle is broken
         lines = audit.log_path().read_text().splitlines()
         lines[0] = lines[0].replace('"operator":"ops"', '"operator":"evil"')
         audit.log_path().write_text("\n".join(lines) + "\n")
@@ -387,7 +387,7 @@ class TestGates(Base):
         self.assertRejected(ap, "G-8", command="apply")
 
     def test_g8_now_override_dry_run_does_not_unlock_real_apply(self):
-        # --now 付きの dry-run は記録に now_override: true を残し、--now なしの apply の根拠にならない
+        # A dry-run with --now records now_override: true and never justifies an apply without --now
         inp = self.ger_input()
         self.assertEqual(self.ger("dry-run", inp, now=fmt_ts(now_utc()))[0], 0)
         rec = json.loads(audit.log_path().read_text().splitlines()[-1])
@@ -399,11 +399,11 @@ class TestGates(Base):
         self.assertNotIn("now_override", json.loads(audit.log_path().read_text().splitlines()[-1]))
 
     def test_g8_garbage_audit_log_is_rejected_not_crash(self):
-        # 多バイト文字の途中で切れた最終行・object でない JSON 行・任意のバイト列: 途中にあれば G-8 の拒否（70 ではない）、
-        # 末尾にあれば壊れたチェーンには追記しないため何もせず 64（R3 F15）
+        # A last line cut inside a multi-byte character, a JSON line that is not an object, arbitrary bytes: in the middle they cause a G-8 rejection (not 70),
+        # at the end nothing is appended to a broken chain, so nothing happens and the exit code is 64 (R3 F15)
         inp = self.ger_input()
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
-        for garbage in ('{"operator":"あ'.encode()[:-1], b"null", b"[1,2]", b'"x"', bytes(range(256))):
+        for garbage in (b'{"operator":"\xe3\x81', b"null", b"[1,2]", b'"x"', bytes(range(256))):
             audit.log_path().unlink(missing_ok=True)
             self.assertEqual(self.ger("dry-run", inp)[0], 0)
             with open(audit.log_path(), "ab") as f:
@@ -414,7 +414,7 @@ class TestGates(Base):
             code, err = self.ger("apply", ap)
             self.assertEqual(code, 64, err); self.assertIn("verify-log", err)
             self.assertEqual(audit.log_path().read_bytes(), before)
-            # 途中にある場合（末尾は健全な記録）は G-8
+            # In the middle (the last record is intact): G-8
             last = [x for x in before.split(b"\n") if x.strip()][-1]
             audit.log_path().write_bytes(before + json.dumps({"prev_hash": audit._line_hash(last)}).encode() + b"\n")
             self.assertRejected(ap, "G-8", command="apply")
@@ -440,15 +440,15 @@ class TestExecution(Base):
         res = {r["finding_id"]: r for r in log["results"]}
         self.assertEqual(res[FID[0]]["before"], "0644"); self.assertEqual(res[FID[0]]["after"], "0600")
         self.assertEqual(res[FID[4]]["reason"], "decision:exception")
-        # 2 回目は already_compliant
+        # Second run: already_compliant
         code, err = self.dry_then_apply(self.ger_input())
         self.assertEqual(code, 0, err)
         self.assertEqual({r["reason"] for r in self.log("apply")["results"] if r["action_type"]}, {"already_compliant"})
 
     def test_unreadable_target(self):
-        os.chmod(self.targets[0], 0o300)  # 所有者が読めない（権限を絞る chmod 0200 だけが通る）
+        os.chmod(self.targets[0], 0o300)  # The owner cannot read it (only chmod 0200, which narrows, passes)
         if os.access(self.targets[0], os.R_OK):
-            self.skipTest("root では読み取り不可のファイルを作れない")
+            self.skipTest("root cannot create an unreadable file")
         p = self.plan(); p["items"][0]["action"]["params"]["mode"] = "0200"; p["plan_hash"] = plan_hash(p)
         code, err = self.dry_then_apply(self.ger_input(plan=p))
         self.assertEqual(code, 0, err)
@@ -469,13 +469,13 @@ class TestExecution(Base):
         with mock.patch.object(chmod, "set_mode", flaky):
             code, err = self.ger("apply", ap)
         self.assertEqual(code, 4, err)
-        self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "ロールバックされていません")
+        self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "not rolled back")
         results = {r["finding_id"]: r["result"] for r in self.log("apply")["results"]}
         self.assertEqual([results[f] for f in FID[:3]], ["rolled_back", "rolled_back", "failed"])
         self.assertEqual(self.log("apply")["status"], "error")
 
     def test_rollback_tracks_items_by_position_not_finding_id(self):
-        # 同じ finding_id の item があっても、ロールバック結果を別の item に書き込まないこと
+        # Even with items sharing a finding_id, rollback results must not be written to another item
         rej, prepared = gates.check_gates(self.ger_input(mode="apply"), "ops", now_utc(NOW), "verify", 86400)
         self.assertEqual(rej, [])
         for i, s in enumerate(prepared):
@@ -503,7 +503,7 @@ class TestExecution(Base):
 
         def swap_after_inspect(target):
             st = real_inspect(target)
-            if target.endswith("key1"):  # 事前検証の直後に差し替える
+            if target.endswith("key1"):  # Replace right after pre-validation
                 os.unlink(target); Path(target).write_text("evil"); os.chmod(target, 0o644)
             return st
         with mock.patch.object(chmod, "inspect", swap_after_inspect):
@@ -513,7 +513,7 @@ class TestExecution(Base):
         self.assertEqual(mode_of(self.targets[1]), 0o644)
 
     def test_unverifiable_after_apply_is_rollback_failed(self):
-        # fchmod の後に対象が差し替えられた（事後確認に失敗）場合、その item は戻せないため rollback_failed
+        # If the target is replaced after fchmod (the post-check fails), that item cannot be undone: rollback_failed
         inp = self.ger_input()
         self.assertEqual(self.ger("dry-run", inp)[0], 0)
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
@@ -522,7 +522,7 @@ class TestExecution(Base):
         def fchmod_then_swap(fd, mode):
             real_fchmod(fd, mode)
             calls["n"] += 1
-            if calls["n"] == 2:  # key1 の適用直後に差し替える
+            if calls["n"] == 2:  # Replace right after key1 is applied
                 os.rename(self.targets[1], self.d / "moved"); self.targets[1].write_text("evil"); os.chmod(self.targets[1], 0o644)
         with mock.patch.object(chmod.os, "fchmod", fchmod_then_swap):
             code, err = self.ger("apply", ap)
@@ -532,7 +532,7 @@ class TestExecution(Base):
         self.assertEqual(mode_of(self.targets[0]), 0o644)
         self.assertEqual(res[FID[1]]["result"], "failed")
         self.assertIn("applied_unverified", res[FID[1]]["reason"])
-        self.assertEqual(mode_of(self.d / "moved"), 0o600)  # 実際に変更が残っている
+        self.assertEqual(mode_of(self.d / "moved"), 0o600)  # The change really remains
 
     def test_output_path_validated_before_changes(self):
         inp = self.ger_input()
@@ -542,11 +542,11 @@ class TestExecution(Base):
         for out in ("/nonexistent/dir/x.json", str(self.d)):
             code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", out)
             self.assertEqual(code, 64, err)
-            self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "出力先が不正なのに変更されています")
+            self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "changed although the output path is invalid")
         self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
 
     def test_output_empty_or_trailing_slash_rejected_before_changes(self):
-        # abspath は "" を cwd に、末尾の / を落として解釈するため、書けない出力先が事前確認を通っていた
+        # abspath reads "" as cwd and drops a trailing /, so unwritable output paths used to pass the pre-check
         inp = self.ger_input()
         self.assertEqual(self.ger("dry-run", inp)[0], 0)
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
@@ -555,13 +555,13 @@ class TestExecution(Base):
         for out in ("", str(self.d / "nd") + "/", str(existing) + "/", str(existing) + "/x", str(self.d / "nd" / "..")):
             code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", out)
             self.assertEqual(code, 64, (out, err))
-            self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), f"出力先が不正なのに変更されています: {out!r}")
+            self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), f"changed although the output path is invalid: {out!r}")
         self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
         self.assertEqual(existing.read_text(), "old")
         self.assertFalse((self.d / "nd").exists())
 
     def test_output_must_be_regular_file_not_symlink(self):
-        # FIFO・ソケット・デバイスやシンボリックリンクを通常ファイルで置き換えない（root で -o /dev/null を壊さない）
+        # Never replace FIFOs, sockets, devices or symbolic links with a regular file (as root, -o /dev/null must not be broken)
         inp = self.ger_input()
         self.assertEqual(self.ger("dry-run", inp)[0], 0)
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
@@ -591,8 +591,8 @@ class TestExecution(Base):
         for out in (str(audit.log_path()), str(audit.log_dir() / "other.json"), src, str(hl)):
             code, err = self.run_cli("dry-run", src, "--operator", "ops", "--now", NOW, "-o", out)
             self.assertEqual(code, 64, (out, err))
-        self.assertEqual(audit.log_path().read_bytes(), before, "監査ログが置き換えられています")
-        self.assertEqual(Path(src).read_bytes(), src_bytes, "入力が上書きされています")
+        self.assertEqual(audit.log_path().read_bytes(), before, "the audit log was replaced")
+        self.assertEqual(Path(src).read_bytes(), src_bytes, "the input was overwritten")
         self.assertFalse((audit.log_dir() / "other.json").exists())
 
     def test_output_must_not_be_plan_target(self):
@@ -604,15 +604,15 @@ class TestExecution(Base):
             for out in (str(self.targets[1]), str(hl)):
                 code, err = self.run_cli(command, self.write(src), "--operator", "ops", "--now", NOW, "-o", out)
                 self.assertEqual(code, 64, (command, out, err))
-                self.assertIn("計画の対象", err)
-        self.assertTrue(all(mode_of(t) == 0o644 and t.read_text() == "x" for t in self.targets), "対象が変更されています")
+                self.assertIn("plan target", err)
+        self.assertTrue(all(mode_of(t) == 0o644 and t.read_text() == "x" for t in self.targets), "a target was changed")
         recs = [json.loads(line) for line in audit.log_path().read_text().splitlines()]
         self.assertEqual([r["result"] for r in recs[1:]], ["error"] * 4)
-        self.assertTrue(all("計画の対象" in r["error"] for r in recs[1:]))
+        self.assertTrue(all("plan target" in r["error"] for r in recs[1:]))
         self.assertEqual(audit.verify_chain(), [])
 
     def test_output_parent_directories_must_not_be_plan_targets(self):
-        # -o の親ディレクトリやその上位を chmod すると、apply 後に remediation-log を書けなくなる
+        # A chmod of the parent directory of -o or a directory above it would make remediation-log unwritable after apply
         out = self.d / "out"; sub = out / "sub"; sub.mkdir(parents=True)
         os.chmod(out, 0o755); os.chmod(sub, 0o755)
         for t in (sub, out):
@@ -621,13 +621,13 @@ class TestExecution(Base):
             ap = copy.deepcopy(inp); ap["mode"] = "apply"
             code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", str(sub / "x.json"))
             self.assertEqual(code, 64, (t, err))
-            self.assertIn("-o の出力先ディレクトリ", err)
-            self.assertEqual(stat.S_IMODE(os.stat(t).st_mode), 0o755, "対象が変更されています")
+            self.assertIn("the -o output directory", err)
+            self.assertEqual(stat.S_IMODE(os.stat(t).st_mode), 0o755, "a target was changed")
         self.assertFalse((sub / "x.json").exists())
 
     def test_output_write_failure_after_apply_is_not_rollback_failed(self):
-        # 変更をすべて適用した後に remediation-log を書けなかった場合、ロールバックはしていないので
-        # rollback_failed と記録しない。以前の実行の remediation-log を今回のものと取り違えないよう消す
+        # If remediation-log cannot be written after every change was applied, there was no rollback, so
+        # it is not recorded as rollback_failed. The remediation-log of an earlier run is removed so it is not mistaken for this one
         inp = self.ger_input()
         self.assertEqual(self.ger("dry-run", inp)[0], 0)
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
@@ -639,7 +639,7 @@ class TestExecution(Base):
         rec = json.loads(audit.log_path().read_text().splitlines()[-1])
         self.assertEqual(rec["result"], "applied_unlogged")
         self.assertNotIn("output_hash", rec)
-        self.assertFalse(stale.exists(), "以前の remediation-log が残っています")
+        self.assertFalse(stale.exists(), "the earlier remediation-log is still there")
 
     def test_output_write_failure(self):
         inp = self.ger_input()
@@ -648,12 +648,12 @@ class TestExecution(Base):
             code, err = self.ger("dry-run", inp)
             self.assertNotEqual(code, 0, err)
             code, err = self.ger("apply", ap)
-            self.assertEqual(code, 3, err); self.assertIn("G-8", err)  # 書けなかった dry-run では apply できない
+            self.assertEqual(code, 3, err); self.assertIn("G-8", err)  # A dry-run whose log could not be written does not allow apply
         self.assertEqual(self.ger("dry-run", inp)[0], 0)
         with mock.patch.object(cli, "write_atomic", side_effect=OSError("disk full")):
             code, err = self.ger("apply", ap)
         self.assertEqual(code, 5, err)
-        self.assertIn("手動で対応", err)
+        self.assertIn("by hand", err)
         recs = [json.loads(line) for line in audit.log_path().read_text().splitlines()]
         self.assertEqual([r["result"] for r in recs], ["error", "rejected", "ok", "applied_unlogged"])
         self.assertNotIn("output_hash", recs[0]); self.assertNotIn("output_hash", recs[-1])
@@ -664,20 +664,20 @@ class TestExecution(Base):
             for command in ("verify", "dry-run", "apply"):
                 code, err = self.ger(command, self.ger_input(mode="dry-run" if command == "verify" else command))
                 self.assertEqual(code, 64, err)
-                self.assertIn("テスト専用", err)
+                self.assertIn("for tests only", err)
             self.assertEqual(self.ger("verify", self.ger_input(), now=None)[0], 0)
         self.assertFalse(audit.log_path().exists() and "dry-run" in audit.log_path().read_text())
 
     def test_audit_torn_last_line_and_symlink(self):
         audit.ensure_writable()
-        audit.log_path().write_bytes(b'{"skill":"ger","comm')  # クラッシュで途中まで書かれた最終行
-        with self.assertRaises(audit.BrokenChain):  # R3 F15: 壊れたチェーンの後ろには追記しない
+        audit.log_path().write_bytes(b'{"skill":"ger","comm')  # A last line half written by a crash
+        with self.assertRaises(audit.BrokenChain):  # R3 F15: nothing is appended after a broken chain
             audit.append({"command": "verify", "result": "ok"})
         self.assertEqual(audit.log_path().read_bytes(), b'{"skill":"ger","comm')
         self.assertEqual(self.ger("verify", self.ger_input())[0], 64)
         other = self.d / "elsewhere"; other.write_text("")
         audit.log_path().unlink(); audit.log_path().symlink_to(other)
-        for check in (audit.ensure_writable, lambda: None):  # 事前確認と O_NOFOLLOW の両方で拒否する
+        for check in (audit.ensure_writable, lambda: None):  # Rejected by both the pre-check and O_NOFOLLOW
             with mock.patch.object(audit, "ensure_writable", check), self.assertRaises(OSError):
                 audit.append({"command": "verify", "result": "ok"})
         self.assertEqual(self.ger("verify", self.ger_input())[0], 64)
@@ -688,11 +688,11 @@ class TestExecution(Base):
         for m in (0o777, 0o730, 0o702):
             os.chmod(d, m)
             code, err = self.ger("verify", self.ger_input())
-            self.assertEqual(code, 64, err); self.assertIn("書き込み可能", err)
+            self.assertEqual(code, 64, err); self.assertIn("writable by group or others", err)
         os.chmod(d, 0o700)
         with mock.patch.object(audit.os, "geteuid", return_value=os.geteuid() + 1):
             code, err = self.ger("verify", self.ger_input())
-        self.assertEqual(code, 64, err); self.assertIn("所有者", err)
+        self.assertEqual(code, 64, err); self.assertIn("not owned by", err)
         self.assertFalse(audit.log_path().exists())
         self.assertEqual(self.ger("verify", self.ger_input())[0], 0)
 
@@ -715,52 +715,52 @@ class TestExecution(Base):
 
 
 class TestRegressionsR3Fixes(Base):
-    """round 3 の指摘（F1 / F2 / F3 / F5 / F6 / F7 / F8 / F10 / F14 / F15）の回帰テスト。"""
+    """Regression tests for the round 3 findings (F1 / F2 / F3 / F5 / F6 / F7 / F8 / F10 / F14 / F15)."""
 
     def reject_msg(self, inp, gate, text, command="verify", **kw):
         code, err = self.ger(command, inp, **kw)
         self.assertEqual(code, 3, err)
         self.assertIn(gate, err)
         self.assertIn(text, err)
-        self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "拒否時に変更されています")
+        self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "changed although rejected")
         return err
 
     def rehash(self, p):
         p["plan_hash"] = plan_hash(p)
         return p
 
-    # F1: plan を書き換えて plan_hash と approval_token を計算し直しても、plan だけで評価できる ZET の不変条件で止める
+    # F1: even if the plan is rewritten and plan_hash and approval_token recomputed, the ZET invariants that can be evaluated from the plan alone stop it
     def test_f1_tampered_and_rehashed_plan_rechecked(self):
         sp = {"signed": True, "divergence": ["network"], "diff_anomaly": False, "declared_effects": ["exec"]}
         cases = []
-        p = self.plan(); p["items"][3].update(skillpact=dict(sp), level_effective="CRITICAL"); cases.append((p, "I-5", "exception にできません"))
+        p = self.plan(); p["items"][3].update(skillpact=dict(sp), level_effective="CRITICAL"); cases.append((p, "I-5", "cannot be an exception"))
         p = self.plan(); p["items"][0]["skillpact"] = dict(sp, divergence=[]); p["items"][0]["approved_by"] = ["a", "b"]
-        p["items"][0]["action"]["skillpact_effects"] = []; cases.append((p, "I-4", "declared_effects と一致しません"))
+        p["items"][0]["action"]["skillpact_effects"] = []; cases.append((p, "I-4", "does not match the item's skillpact.declared_effects"))
         p = self.plan(); p["items"][0].update(skillpact=dict(sp, divergence=[], declared_effects=[], diff_anomaly=True))
         cases.append((p, "I-6", "diff_anomaly"))
         p = self.plan(); p["items"][0].update(skillpact=dict(sp, declared_effects=[]), level_effective="HIGH")
         cases.append((p, "I-7", "CRITICAL"))
-        p = self.plan(); p["items"][3]["approved_by"] = ["alice"]; cases.append((p, "I-3", "自己承認"))
-        p = self.plan(); p["items"][3]["approved_by"] = []; cases.append((p, "I-3", "1 名以上"))
+        p = self.plan(); p["items"][3]["approved_by"] = ["alice"]; cases.append((p, "I-3", "self-approval"))
+        p = self.plan(); p["items"][3]["approved_by"] = []; cases.append((p, "I-3", "at least 1 approver"))
         p = self.plan(); p["items"][3]["reason"] = " "; cases.append((p, "I-3", "reason"))
-        p = self.plan(); p["items"][1]["decision"] = "defer"; cases.append((p, "I-4", "remediate 以外で action"))
+        p = self.plan(); p["items"][1]["decision"] = "defer"; cases.append((p, "I-4", "action is set although the decision is not remediate"))
         p = self.plan(); p["items"][0]["owner"] = None; cases.append((p, "I-4", "owner"))
-        p = self.plan(); p["items"][0]["action"]["target"] = "/" + str(self.targets[0]); cases.append((p, "I-4", "正規化"))
-        p = self.plan(); p["held"] = [{"finding_id": FID[0], "reason": "x"}]; cases.append((p, "I-1", "重複"))
+        p = self.plan(); p["items"][0]["action"]["target"] = "/" + str(self.targets[0]); cases.append((p, "I-4", "normalized"))
+        p = self.plan(); p["held"] = [{"finding_id": FID[0], "reason": "x"}]; cases.append((p, "I-1", "duplicated"))
         p = self.plan(status="partial"); cases.append((p, "I-12", "held"))
-        p = self.plan(); p["items"][0]["decided_at"] = "2026-10-22T12:00:01Z"; cases.append((p, "I-9", "現在時刻より後"))
-        p = self.plan(); p["items"][0]["due_at"] = "2026-10-22T09:00:00Z"; cases.append((p, "I-9", "decided_at より前"))
-        p = self.plan(); p["items"][0]["decided_at"] = "2026-10-22T09:00:00Z"; cases.append((p, "I-9", "created_at より前"))
-        p = self.plan(); p["items"][0]["approved_by"] = ["Lead", "lead"]; cases.append((p, "I-6", "重複"))
+        p = self.plan(); p["items"][0]["decided_at"] = "2026-10-22T12:00:01Z"; cases.append((p, "I-9", "later than the current time"))
+        p = self.plan(); p["items"][0]["due_at"] = "2026-10-22T09:00:00Z"; cases.append((p, "I-9", "earlier than decided_at"))
+        p = self.plan(); p["items"][0]["decided_at"] = "2026-10-22T09:00:00Z"; cases.append((p, "I-9", "earlier than the plan's created_at"))
+        p = self.plan(); p["items"][0]["approved_by"] = ["Lead", "lead"]; cases.append((p, "I-6", "duplicates"))
         p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = ["exec"]; cases.append((p, "I-6", "exec"))
         for p, code, text in cases:
             err = self.reject_msg(self.ger_input(plan=self.rehash(p), approvers=("lead1", "lead2")), "G-1", text)
-            self.assertIn(f"ZET {code} 相当", err)
-        # skillpact の要約が整合していれば通る（ZET が finalize で付けた形）
+            self.assertIn(f"ZET {code} equivalent", err)
+        # A consistent skillpact summary passes (the shape ZET adds in finalize)
         p = self.plan(); p["items"][0].update(skillpact=dict(sp, declared_effects=[]), level_effective="CRITICAL")
         self.assertEqual(self.ger("verify", self.ger_input(plan=self.rehash(p)))[0], 0)
 
-    # F7: chmod は権限を絞るだけ（現在の mode に無いビットを足さない）。world-writable も拒否
+    # F7: chmod only narrows permissions (never adds bits missing from the current mode). world-writable is rejected too
     def test_f7_chmod_only_tightens(self):
         for before, mode, ok in ((0o644, "0600", True), (0o644, "0644", True), (0o644, "0000", True), (0o600, "0640", False),
                                  (0o640, "0604", False), (0o600, "0700", False), (0o666, "0666", False), (0o777, "0757", False)):
@@ -768,26 +768,26 @@ class TestRegressionsR3Fixes(Base):
             p = self.plan(); p["items"][0]["action"]["params"]["mode"] = mode
             code, err = self.ger("verify", self.ger_input(plan=self.rehash(p)))
             self.assertEqual(code == 0, ok, (oct(before), mode, err))
-            if not ok:  # 静的に分かる world-writable は G-1（params の検査）、現在の mode に権限を足すものは G-7
+            if not ok:  # A statically known world-writable is G-1 (params check); adding a permission to the current mode is G-7
                 self.assertIn("G-1" if int(mode, 8) & 0o002 else "G-7", err)
-                self.assertTrue("権限" in err or "world-writable" in err, err)
+                self.assertTrue("permission" in err or "world-writable" in err, err)
             self.assertEqual(mode_of(self.targets[0]), before)
         os.chmod(self.targets[0], 0o644)
 
-    # F2: GER_LOG_DIR をシンボリックリンク経由で指定しても、リンクを置いたディレクトリ（字句上の上位）を対象にできない
+    # F2: even if GER_LOG_DIR is given through a symbolic link, the directory holding the link (lexical ancestor) cannot be a target
     def test_f2_log_dir_symlink_ancestors_protected(self):
         a, b = self.d / "A", self.d / "B" / "ger"
         a.mkdir(); b.mkdir(parents=True); os.chmod(b, 0o700); os.chmod(a, 0o755)
         (a / "logdir").symlink_to(b)
         os.environ["GER_LOG_DIR"] = str(a / "logdir")
-        err = self.reject_msg(self.ger_input(plan=self.plan([a])), "G-7", "監査ログ")
+        err = self.reject_msg(self.ger_input(plan=self.plan([a])), "G-7", "audit log")
         self.assertIn("G-7", err)
         self.assertEqual(stat.S_IMODE(os.stat(a).st_mode), 0o755)
-        # 起動時に解決した実パスへ書く（リンクを後から差し替えられても別の場所に書かない）
+        # Writes go to the real path resolved at startup (a link replaced later does not redirect them)
         self.assertEqual(audit.log_dir(), Path(os.path.realpath(b)))
         self.assertTrue((b / "ger-audit.jsonl").exists())
 
-    # F3: -o の親がシンボリックリンク経由でも、リンクを置いたディレクトリを計画の対象にできない
+    # F3: even if the parent of -o is reached through a symbolic link, the directory holding the link cannot be a plan target
     def test_f3_output_parent_symlink_ancestors_protected(self):
         a, out = self.d / "A", self.d / "B" / "out"
         a.mkdir(); out.mkdir(parents=True); os.chmod(a, 0o755)
@@ -797,10 +797,10 @@ class TestRegressionsR3Fixes(Base):
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
         code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", str(a / "outdir" / "x.json"))
         self.assertEqual(code, 64, err)
-        self.assertIn("-o の出力先ディレクトリ", err)
+        self.assertIn("the -o output directory", err)
         self.assertEqual(stat.S_IMODE(os.stat(a).st_mode), 0o755)
 
-    # F5: dry-run 記録は 1 回の apply で使い切る（拒否・変更前の引数エラーでは使わない）
+    # F5: a dry-run record is used up by one apply (rejections and argument errors before any change do not use it)
     def test_f5_dry_run_record_consumed_by_apply(self):
         inp = self.ger_input()
         code, err = self.dry_then_apply(inp)
@@ -809,21 +809,21 @@ class TestRegressionsR3Fixes(Base):
             os.chmod(t, 0o644)
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
         self.reject_msg(ap, "G-8", "dry-run", command="apply")
-        self.assertEqual(self.dry_then_apply(inp)[0], 0)  # 新しい dry-run なら再び実行できる
+        self.assertEqual(self.dry_then_apply(inp)[0], 0)  # A new dry-run allows running again
         for t in self.targets:
             os.chmod(t, 0o644)
-        # 引数エラー（変更前に止まった apply）は dry-run を使用済みにしない
+        # An argument error (an apply stopped before any change) does not mark the dry-run as used
         self.assertEqual(self.ger("dry-run", inp)[0], 0)
         code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", str(self.targets[0]))
         self.assertEqual(code, 64, err)
         self.assertEqual(self.ger("apply", ap)[0], 0)
 
-    # F5: 承認の有効期限（既定 7 日、GER_APPROVAL_MAX_AGE）と、remediate の due_at の最大値を過ぎた計画
+    # F5: approval expiry (default 7 days, GER_APPROVAL_MAX_AGE) and plans past the latest remediate due_at
     def test_f5_approval_max_age_and_plan_due(self):
         inp = self.ger_input()
         p = self.plan(); [it.update(due_at="2026-12-31T00:00:00Z") for it in p["items"] if it["decision"] == "remediate"]
         inp2 = self.ger_input(plan=self.rehash(p))
-        self.assertEqual(self.ger("verify", inp2, now="2026-10-29T11:00:00Z")[0], 0)  # ちょうど 7 日
+        self.assertEqual(self.ger("verify", inp2, now="2026-10-29T11:00:00Z")[0], 0)  # Exactly 7 days
         self.reject_msg(inp2, "G-3", "GER_APPROVAL_MAX_AGE", now="2026-10-29T11:00:01Z")
         os.environ["GER_APPROVAL_MAX_AGE"] = str(30 * 86400)
         try:
@@ -833,10 +833,10 @@ class TestRegressionsR3Fixes(Base):
                 self.assertEqual(self.ger("verify", inp2)[0], 64, bad)
         finally:
             os.environ.pop("GER_APPROVAL_MAX_AGE", None)
-        # due_at の最大値（2026-10-29T10:00:00Z）を過ぎたら、承認が新しくても実行しない
-        self.reject_msg(inp, "G-2", "期限切れ", now="2026-10-29T10:00:01Z")
+        # Past the latest due_at (2026-10-29T10:00:00Z), nothing runs even with a fresh approval
+        self.reject_msg(inp, "G-2", "expired", now="2026-10-29T10:00:01Z")
 
-    # F5: ZET が --now で作った計画（now_override: true）は GER_ALLOW_NOW_OVERRIDE=1 のときだけ
+    # F5: a plan made by ZET with --now (now_override: true) is accepted only when GER_ALLOW_NOW_OVERRIDE=1
     def test_f5_now_override_plan_refused_by_default(self):
         now = now_utc()
         ts = lambda d: fmt_ts(now + dt.timedelta(seconds=d))  # noqa: E731
@@ -849,16 +849,16 @@ class TestRegressionsR3Fixes(Base):
                 it["recheck_at"] = ts(86400)
         p["now_override"] = True
         inp = self.ger_input(plan=self.rehash(p)); inp["approval"]["approved_at"] = ts(-60)
-        self.assertEqual(self.ger("verify", inp, now=None)[0], 0)  # テスト環境では GER_ALLOW_NOW_OVERRIDE=1
+        self.assertEqual(self.ger("verify", inp, now=None)[0], 0)  # GER_ALLOW_NOW_OVERRIDE=1 in the test environment
         os.environ.pop("GER_ALLOW_NOW_OVERRIDE")
         try:
             self.reject_msg(inp, "G-2", "now_override", now=None)
         finally:
             os.environ["GER_ALLOW_NOW_OVERRIDE"] = "1"
-        # ZET の旧版の確定 plan（now_override なし）はそのまま受理する（後方互換）
+        # A finalized plan from an older ZET (no now_override) is accepted as is (backward compatibility)
         self.assertEqual(self.ger("verify", self.ger_input(), now=NOW)[0], 0)
 
-    # F6: --now 付きの apply は --now 付きの dry-run 記録だけを数える（実時刻の古い記録を --now で期限内に見せない）
+    # F6: an apply with --now counts only dry-run records made with --now (an old real-time record cannot look unexpired with --now)
     def test_f6_now_override_apply_counts_only_override_dry_runs(self):
         now = now_utc()
         ts = lambda d: fmt_ts(now + dt.timedelta(seconds=d))  # noqa: E731
@@ -868,14 +868,14 @@ class TestRegressionsR3Fixes(Base):
             it["due_at"] = it["due_at"] and ts(86400)
             it["recheck_at"] = it["recheck_at"] and ts(86400)
         inp = self.ger_input(plan=self.rehash(p)); inp["approval"]["approved_at"] = ts(-3600)
-        self.assertEqual(self.ger("dry-run", inp, now=None)[0], 0)  # 実時刻の dry-run
+        self.assertEqual(self.ger("dry-run", inp, now=None)[0], 0)  # dry-run in real time
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
         dry_at = json.loads(audit.log_path().read_text().splitlines()[-1])["finished_at"]
         self.reject_msg(ap, "G-8", "dry-run", command="apply", now=dry_at)
-        self.assertEqual(self.ger("dry-run", inp, now=dry_at)[0], 0)  # --now 付きの dry-run なら --now 付きの apply に使える
+        self.assertEqual(self.ger("dry-run", inp, now=dry_at)[0], 0)  # A dry-run with --now can be used by an apply with --now
         self.assertEqual(self.ger("apply", ap, now=dry_at)[0], 0)
 
-    # F8: 入力由来の文字列（キー名・対象パス）の制御文字をエスケープして表示する
+    # F8: control characters in strings from input (key names, target paths) are escaped when shown
     def test_f8_control_characters_escaped(self):
         bad = self.ger_input(); bad["x\x1b]0;PWNED\x07\x1b[2J\x9b"] = 1
         code, err = self.ger("verify", bad)
@@ -892,18 +892,18 @@ class TestRegressionsR3Fixes(Base):
         self.assertNotIn("\x1b", err)
         self.assertIn("evil\\x1b[2Jdir", err)
 
-    # F10: exec / network / spend / send を宣言したスキルへの操作は allowed_actions の明示と承認者 2 名以上。効果名は 6 種のみ
+    # F10: an operation on a skill that declares exec / network / spend / send needs an explicit allowed_actions entry and 2 or more approvers. Only the 6 effect names
     def test_f10_risky_effects_need_two_approvers_and_enum(self):
         p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = ["network"]
         p["items"][0]["approved_by"] = ["security-lead", "platform-owner"]
-        self.reject_msg(self.ger_input(plan=self.rehash(p)), "G-6", "承認者 2 名以上")
+        self.reject_msg(self.ger_input(plan=self.rehash(p)), "G-6", "2 or more approvers")
         self.assertEqual(self.ger("verify", self.ger_input(plan=p, approvers=("lead1", "LEAD2")))[0], 0)
-        self.reject_msg(self.ger_input(plan=p, approvers=("lead1", "LEAD1")), "G-6", "承認者 2 名以上")  # 大文字小文字だけの違いは 1 名
+        self.reject_msg(self.ger_input(plan=p, approvers=("lead1", "LEAD1")), "G-6", "2 or more approvers")  # Names differing only in case count as 1
         for eff in ("EXEC", " exec ", "exec​", "bogus-effect", "secrets"):
             p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = [eff]
             self.reject_msg(self.ger_input(plan=self.rehash(p)), "G-1", "action")
 
-    # F14: evidence_hash があれば G-7 で現在のファイルと比べる（ZES の規則: 100MB 以下は内容、超えたらパス|サイズ|mtime）
+    # F14: if there is an evidence_hash, G-7 compares it with the current file (ZES rule: up to 100MB the content, above that path|size|mtime)
     def test_f14_evidence_hash_checked(self):
         def with_ev(ev, targets=None):
             p = self.plan(targets)
@@ -918,7 +918,7 @@ class TestRegressionsR3Fixes(Base):
         with mock.patch.object(gates, "EVIDENCE_FULL_HASH_MAX", 3):
             self.assertEqual(self.ger("verify", with_ev(big))[0], 0)
             self.reject_msg(with_ev(good), "G-7", "evidence_hash")
-        sub = self.d / "dir"; sub.mkdir(); os.chmod(sub, 0o755)  # ディレクトリは ZES が detail のハッシュを使うため比べない
+        sub = self.d / "dir"; sub.mkdir(); os.chmod(sub, 0o755)  # Directories are not compared because ZES uses the hash of detail for them
         self.assertEqual(self.ger("verify", with_ev("sha256:" + "0" * 64, [sub]))[0], 0)
 
     # F15: ger verify-log
@@ -927,17 +927,17 @@ class TestRegressionsR3Fixes(Base):
         for _ in range(3):
             self.assertEqual(self.ger("verify", self.ger_input())[0], 0)
         code, err = self.run_cli("verify-log")
-        self.assertEqual(code, 0, err); self.assertIn("3 件", err)
+        self.assertEqual(code, 0, err); self.assertIn("records: 3", err)
         lines = audit.log_path().read_text().splitlines()
         lines[0] = lines[0].replace('"operator":"ops"', '"operator":"evil"')
         audit.log_path().write_text("\n".join(lines) + "\n")
         code, err = self.run_cli("verify-log", str(audit.log_path()))
-        self.assertEqual(code, 3, err); self.assertIn("line 2: prev_hash 不一致", err)
+        self.assertEqual(code, 3, err); self.assertIn("line 2: prev_hash mismatch", err)
 
 
 class TestLauncherNoSite(unittest.TestCase):
-    """bin/ger は site を読み込まない（-S）。site-packages の .pth は import site で実行されるため、
-    ツール自身の中でコードを実行させないには -I だけでは足りない。"""
+    """bin/ger does not load site (-S). .pth files in site-packages are executed by import site, so
+    -I alone is not enough to keep code from running inside the tool itself."""
 
     def test_launcher_passes_I_and_S(self):
         with tempfile.TemporaryDirectory() as d:

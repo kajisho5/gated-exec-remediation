@@ -1,26 +1,26 @@
-"""E2E（成功基準）: ZES → ZET → GER をフィクスチャのツリーで通しで実行し、ZES で再スキャンする。
+"""E2E (success criterion): runs ZES -> ZET -> GER end to end on the fixture trees and rescans with ZES.
 
   python3 -I tests/e2e_zes.py [--zes DIR] [--zet DIR] [--jobs N] [--json OUT] [FIXTURE ...]
 
-ZES のリポジトリは --zes、または環境変数 ZES_REPO / ZES_HOME（zes-scan.sh のあるディレクトリ）。
-ZET のリポジトリは --zet、または環境変数 ZET_HOME（無ければ GER の隣の zero-exec-triage）。
-どちらかが無ければ SKIP（終了コード 0、"SKIP:" を表示）。ZES のリポジトリは読むだけで、フィクスチャは一時ディレクトリに写す。
-（ZES_HOME は zes-scan.sh 自身にとっては「ホーム系検査の対象」を指す環境変数でもある。この E2E では ZES の
-リポジトリの場所として読み、zes-scan.sh を起動するときはフィクスチャのホームで上書きする。）
+The ZES repository is --zes, or the environment variable ZES_REPO / ZES_HOME (the directory with zes-scan.sh).
+The ZET repository is --zet, or the environment variable ZET_HOME (otherwise zero-exec-triage next to GER).
+If either is missing: SKIP (exit code 0, prints "SKIP:"). The ZES repository is only read; fixtures are copied to a temporary directory.
+(For zes-scan.sh itself, ZES_HOME is also the environment variable that names the target of the home checks. This E2E reads it
+as the location of the ZES repository and overrides it with the fixture's home when it starts zes-scan.sh.)
 
-各フィクスチャの手順（設計書 §7.7）:
-  1. zes-scan.sh（tests/expected/<name>.json の mode。ZES_HOST_CHECKS=0 ZES_OFFLINE=1）
-  2. zet draft（policy.scope にフィクスチャのルートとホーム）
-  3. テスト用の判断者が提案を採用する（auto があれば auto、なければ checklist。INFO の既定 defer はそのまま）
-  4. ger preview（拒否された auto は、その finding と同じ group の finding ごと checklist に切り替えて preview し直す）
-  5. zet finalize → 承認（テスト用の 2 名）→ ger dry-run → ger apply
-  6. zes-scan.sh で再スキャン
-  7. ger restore（このフィクスチャの隔離ストアの全エントリ。dry-run → apply）→ zes-scan.sh で再スキャン
-合格の条件:
-  - 再スキャンの finding の集合（level / module / campaign / フィクスチャ相対の path の多重集合）が、
-    計画のうち checklist / defer / exception の item と held の集合とちょうど一致する
-    （auto だけのフィクスチャは 0 件になる）
-  - restore 後の再スキャンが最初のスキャンと一致する（id も一致）
+Steps per fixture (design doc §7.7):
+  1. zes-scan.sh (mode from tests/expected/<name>.json; ZES_HOST_CHECKS=0 ZES_OFFLINE=1)
+  2. zet draft (policy.scope set to the fixture's root and home)
+  3. a test decider adopts the proposals (auto if there is one, otherwise checklist; the default defer for INFO stays)
+  4. ger preview (a rejected auto is switched to checklist together with the findings in the same group, then previewed again)
+  5. zet finalize -> approval (2 test approvers) -> ger dry-run -> ger apply
+  6. rescan with zes-scan.sh
+  7. ger restore (every entry of this fixture's quarantine store; dry-run -> apply) -> rescan with zes-scan.sh
+Pass conditions:
+  - the set of findings of the rescan (multiset of level / module / campaign / fixture-relative path) equals exactly
+    the set of the plan's checklist / defer / exception items and held
+    (a fixture with only auto items ends with 0 findings)
+  - the rescan after restore equals the first scan (ids match too)
 """
 from __future__ import annotations
 
@@ -52,9 +52,9 @@ def find_repos(args):
     zes = args.zes or os.environ.get("ZES_REPO") or os.environ.get("ZES_HOME")
     zet = args.zet or os.environ.get("ZET_HOME") or os.path.join(os.path.dirname(GER), "zero-exec-triage")
     if not zes or not os.path.isfile(os.path.join(zes, "zes-scan.sh")):
-        return None, None, "ZES のリポジトリ（zes-scan.sh）がありません（--zes / ZES_REPO / ZES_HOME）"
+        return None, None, "ZES repository (zes-scan.sh) not found (--zes / ZES_REPO / ZES_HOME)"
     if not os.path.isfile(os.path.join(zet, "bin", "zet")):
-        return None, None, f"ZET のリポジトリがありません（--zet / ZET_HOME）: {zet}"
+        return None, None, f"ZET repository not found (--zet / ZET_HOME): {zet}"
     return os.path.realpath(zes), os.path.realpath(zet), None
 
 
@@ -137,7 +137,7 @@ def decide(draft: dict, use_checklist: set, created: str) -> dict:
             need = max(c.get("min_approvers", 0), 1 if pick["label"] == "auto" else 0)
             it["approved_by"] = ["sec-a", "sec-b"][:max(need, 0)] if need else []
         elif it["decision"] is None:
-            it.update(decision="defer", reason="e2e: 提案なし", decided_by="alice", decided_at=created, due_at=None)
+            it.update(decision="defer", reason="e2e: no proposal", decided_by="alice", decided_at=created, due_at=None)
         if it["decision"] in ("defer", "exception"):
             it["action"] = None
             it["due_at"] = None if it["decision"] == "defer" and it["level_effective"] == "INFO" else it["due_at"]
@@ -186,7 +186,7 @@ def run_fixture(name, zes, zet, work) -> dict:
             res.setdefault("preview_rejected", []).extend(
                 {"key": fx.key(by1[fid]), "reason": x["reason"][:160]} for x in bad for fid in x["finding_ids"])
         else:
-            raise RuntimeError("preview の拒否が収束しません")
+            raise RuntimeError("preview rejections do not converge")
         fx.zet("finalize", fx.p("triage-input.json"), fx.p("previewed.json"), "--operator", "alice", "-o", fx.p("final.json"))
         final = json.load(open(fx.p("final.json")))
         assert plan_hash(final) == final["plan_hash"]
@@ -261,7 +261,7 @@ def main(argv=None) -> int:
     ap.add_argument("--zet")
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--json")
-    ap.add_argument("--keep", action="store_true", help="作業ディレクトリを残す")
+    ap.add_argument("--keep", action="store_true", help="keep the working directory")
     args = ap.parse_args(argv)
     zes, zet, why = find_repos(args)
     if why:
@@ -289,9 +289,9 @@ def main(argv=None) -> int:
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
         else:
-            print(f"作業ディレクトリ: {work}")
+            print(f"working directory: {work}")
     bad = [r for r in results if not r["ok"]]
-    print(f"結果: {len(results) - len(bad)}/{len(results)} 合格")
+    print(f"Result: {len(results) - len(bad)}/{len(results)} passed")
     return 1 if bad else 0
 
 

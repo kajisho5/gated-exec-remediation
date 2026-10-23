@@ -1,8 +1,8 @@
-"""JSON / JSONC の小さな字句解析器と、書式・コメントを保ったままの部分的な差し替え（edit_json）。
+"""A small lexer for JSON / JSONC and partial replacement that keeps formatting and comments (edit_json).
 
-構文木の各値・メンバーの文字位置を求め、取り除く範囲だけを切り取る。元の書式（インデント・コメント・改行）は残す。
-変更後は別の方法でパースし直し（JSON は json.loads、JSONC はコメントと末尾カンマを除いてから json.loads）、
-「変更前の値から取り除いた単位を引いたもの」と一致することを確かめる（定義 T-3）。
+Finds the character positions of every value and member of the syntax tree and cuts out only the ranges to remove. The original formatting (indentation, comments, newlines) is kept.
+The result is parsed again by a different method (JSON with json.loads; JSONC with json.loads after removing comments and trailing commas)
+and must equal "the value before the change minus the removed units" (definition T-3).
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class Node:
 
 
 class Entry:
-    """object のメンバー（key あり）または array の要素。start はキー（要素なら値）の開始位置。"""
+    """An object member (with key) or an array element. start is the start position of the key (of the value for an element)."""
     __slots__ = ("key", "start", "node", "comma")
 
     def __init__(self, key, start, node):
@@ -43,7 +43,7 @@ class _Lexer:
 
     def err(self, msg):
         line = self.s.count("\n", 0, self.i) + 1
-        raise JsonEditError(f"{msg}（{line} 行目）")
+        raise JsonEditError(f"{msg} (line {line})")
 
     def skip(self):
         s = self.s
@@ -57,7 +57,7 @@ class _Lexer:
             elif self.jsonc and s.startswith("/*", self.i):
                 j = s.find("*/", self.i + 2)
                 if j < 0:
-                    self.err("閉じていないコメント")
+                    self.err("unterminated comment")
                 self.i = j + 2
             else:
                 return
@@ -67,7 +67,7 @@ class _Lexer:
         j = st + 1
         while True:
             if j >= self.n:
-                self.err("閉じていない文字列")
+                self.err("unterminated string")
             c = s[j]
             if c == '"':
                 break
@@ -75,22 +75,22 @@ class _Lexer:
                 j += 2
                 continue
             if c < " ":
-                self.err("文字列に制御文字")
+                self.err("control character in string")
             j += 1
         raw = s[st:j + 1]
         try:
             val = json.loads(raw)
         except ValueError:
-            self.err("文字列のエスケープが不正")
+            self.err("invalid escape in string")
         self.i = j + 1
         return val, st
 
     def value(self, depth: int) -> Node:
         if depth > MAX_DEPTH:
-            self.err("入れ子が深すぎます")
+            self.err("nesting is too deep")
         self.skip()
         if self.i >= self.n:
-            self.err("値がありません")
+            self.err("missing value")
         c = self.s[self.i]
         if c == "{":
             return self.container("object", "}", depth)
@@ -108,11 +108,11 @@ class _Lexer:
                     break
             else:
                 if not m or m.end() == self.i:
-                    self.err("値を解釈できません")
+                    self.err("cannot interpret value")
                 txt = m.group(0)
                 node.value = json.loads(txt)
                 if isinstance(node.value, float) and not math.isfinite(node.value):
-                    self.err("有限でない数値")
+                    self.err("non-finite number")
                 self.i = m.end()
         node.end = self.i
         return node
@@ -124,24 +124,24 @@ class _Lexer:
         while True:
             self.skip()
             if self.i >= self.n:
-                self.err("閉じていない " + kind)
+                self.err("unterminated " + kind)
             if self.s[self.i] == close:
                 if node.entries and node.entries[-1].comma is not None and not self.jsonc:
-                    self.err("末尾のカンマ（JSON では不可）")
+                    self.err("trailing comma (not allowed in JSON)")
                 self.i += 1
                 break
             if node.entries and node.entries[-1].comma is None:
-                self.err("カンマがありません")
+                self.err("missing comma")
             if kind == "object":
                 if self.s[self.i] != '"':
-                    self.err("キーは文字列であること")
+                    self.err("keys must be strings")
                 key, kst = self.string()
                 if key in keys:
-                    self.err("キーが重複しています")
+                    self.err("duplicate key")
                 keys.add(key)
                 self.skip()
                 if self.i >= self.n or self.s[self.i] != ":":
-                    self.err(": がありません")
+                    self.err("missing :")
                 self.i += 1
                 v = self.value(depth + 1)
                 e = Entry(key, kst, v)
@@ -162,7 +162,7 @@ def parse(text: str, jsonc: bool) -> Node:
     root = lx.value(1)
     lx.skip()
     if lx.i != lx.n:
-        lx.err("値の後ろに余分な内容")
+        lx.err("extra content after the value")
     return root
 
 
@@ -178,22 +178,22 @@ def _no_dup(pairs):
     d = {}
     for k, v in pairs:
         if k in d:
-            raise ValueError("キーが重複しています")
+            raise ValueError("duplicate key")
         d[k] = v
     return d
 
 
 def _reject_const(name):
-    raise ValueError(f"非標準の定数 {name}")
+    raise ValueError(f"non-standard constant {name}")
 
 
 def strip_jsonc(text: str) -> str:
-    """コメントと末尾カンマを取り除いた厳密な JSON テキスト（T-3 の再パース用。字句解析器とは別の経路で作る）。"""
+    """Strict JSON text with comments and trailing commas removed (for the T-3 re-parse; built by a path separate from the lexer)."""
     out = []
     i, n = 0, len(text)
     if text.startswith("﻿"):
         i = 1
-    pending_comma = None  # 直前のカンマ（次の非空白が } / ] なら捨てる）
+    pending_comma = None  # The previous comma (dropped if the next non-whitespace is } / ])
     while i < n:
         c = text[i]
         if c == '"':
@@ -211,7 +211,7 @@ def strip_jsonc(text: str) -> str:
         elif text.startswith("/*", i):
             j = text.find("*/", i + 2)
             if j < 0:
-                raise ValueError("閉じていないコメント")
+                raise ValueError("unterminated comment")
             i = j + 2
         elif c == ",":
             if pending_comma is not None:
@@ -234,7 +234,7 @@ def strip_jsonc(text: str) -> str:
 
 
 def reparse(text: str, fmt: str):
-    """T-3 用の独立したパース。"""
+    """Independent parse for T-3."""
     src = strip_jsonc(text) if fmt == "jsonc" else (text[1:] if text.startswith("﻿") else text)
     return json.loads(src, object_pairs_hook=_no_dup, parse_constant=_reject_const)
 
@@ -244,14 +244,14 @@ def detect_format(text: str) -> str:
         parse(text, False)
         return "json"
     except JsonEditError:
-        parse(text, True)  # JSONC でも読めなければ JsonEditError
+        parse(text, True)  # JsonEditError if it cannot be read even as JSONC
         return "jsonc"
 
 
 # --- JSON pointer ---------------------------------------------------------------------------
 def split_pointer(ptr: str) -> list[str]:
     if not ptr.startswith("/"):
-        raise JsonEditError("pointer は / で始めること")
+        raise JsonEditError("pointer must start with /")
     return [p.replace("~1", "/").replace("~0", "~") for p in ptr[1:].split("/")]
 
 
@@ -260,7 +260,7 @@ def escape_token(t: str) -> str:
 
 
 def find(root: Node, ptr: str) -> tuple[Node | None, int, Node]:
-    """(親コンテナ, 親の中の位置, 値のノード)。ルートを指す pointer は不可。"""
+    """(parent container, position in the parent, value node). A pointer to the root is not allowed."""
     toks = split_pointer(ptr)
     parent, idx, cur = None, -1, root
     for t in toks:
@@ -270,13 +270,13 @@ def find(root: Node, ptr: str) -> tuple[Node | None, int, Node]:
                     parent, idx, cur = cur, i, e.node
                     break
             else:
-                raise JsonEditError(f"pointer {ptr} が指す値がありません")
+                raise JsonEditError(f"no value at pointer {ptr}")
         elif cur.kind == "array":
             if not re.fullmatch(r"0|[1-9][0-9]*", t) or int(t) >= len(cur.entries):
-                raise JsonEditError(f"pointer {ptr} が指す値がありません")
+                raise JsonEditError(f"no value at pointer {ptr}")
             parent, idx, cur = cur, int(t), cur.entries[int(t)].node
         else:
-            raise JsonEditError(f"pointer {ptr} が指す値がありません")
+            raise JsonEditError(f"no value at pointer {ptr}")
     return parent, idx, cur
 
 
@@ -309,13 +309,13 @@ def set_value(value, ptr: str, new):
         cur[toks[-1]] = new
 
 
-# --- 差し替え ----------------------------------------------------------------------------------
+# --- Replacement -------------------------------------------------------------------------------
 def _line_start(s: str, i: int) -> int:
     return s.rfind("\n", 0, i) + 1
 
 
 def _rest_is_blank(s: str, i: int, jsonc: bool) -> int | None:
-    """i から行末までが空白（と JSONC のコメント）だけなら改行の次の位置、そうでなければ None。"""
+    """If only whitespace (and JSONC comments) follows i up to the end of the line, the position after the newline; otherwise None."""
     n = len(s)
     while i < n:
         c = s[i]
@@ -359,9 +359,9 @@ def removal_span(s: str, parent: Node, idx: int, jsonc: bool) -> tuple[int, int]
 
 
 def apply_ops(text: str, fmt: str, ops: list[dict]) -> tuple[str, object]:
-    """ops を適用したテキストと、期待される値（変更前の値から取り除き・置き換えたもの）を返す。
-    ops は {"op": "remove"|"replace_const", "pointer", "const"?}。各 op の前に構文木を作り直す。
-    元のテキストで後ろにあるものから順に適用する（前にある配列要素の添字がずれない）。"""
+    """Returns the text with ops applied and the expected value (the value before the change with removals and replacements).
+    ops are {"op": "remove"|"replace_const", "pointer", "const"?}. The syntax tree is rebuilt before each op.
+    Applied from the last position in the original text backwards (indexes of earlier array elements do not shift)."""
     jsonc = fmt == "jsonc"
     root = parse(text, jsonc)
     expected = copy.deepcopy(to_python(root))
@@ -369,15 +369,15 @@ def apply_ops(text: str, fmt: str, ops: list[dict]) -> tuple[str, object]:
     for a in ptrs:
         for b in ptrs:
             if a != b and (b + "/").startswith(a + "/"):
-                raise JsonEditError(f"ops の範囲が重なっています（{a} と {b}）")
+                raise JsonEditError(f"ops ranges overlap ({a} and {b})")
     if len(set(ptrs)) != len(ptrs):
-        raise JsonEditError("ops に同じ pointer が 2 回あります")
+        raise JsonEditError("ops contains the same pointer twice")
     order = sorted(ops, key=lambda o: find(root, o["pointer"])[2].start, reverse=True)
     for o in order:
         root = parse(text, jsonc)
         parent, idx, node = find(root, o["pointer"])
         if parent is None:
-            raise JsonEditError("ルートは取り除けません")
+            raise JsonEditError("the root cannot be removed")
         if o["op"] == "remove":
             a, b = removal_span(text, parent, idx, jsonc)
             text = text[:a] + text[b:]
@@ -386,5 +386,5 @@ def apply_ops(text: str, fmt: str, ops: list[dict]) -> tuple[str, object]:
             text = text[:node.start] + json.dumps(o["const"], ensure_ascii=False) + text[node.end:]
             set_value(expected, o["pointer"], o["const"])
         else:
-            raise JsonEditError(f"未知の op {o['op']}")
+            raise JsonEditError(f"unknown op {o['op']}")
     return text, expected

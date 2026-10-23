@@ -1,10 +1,10 @@
-"""ファイルシステムの共通部品（外部プロセスを使わない）。
+"""Shared file system parts (no external processes).
 
-- resolve(): 対象を / から 1 要素ずつ O_PATH|O_NOFOLLOW|O_DIRECTORY でたどり、親ディレクトリの fd を返す。
-  途中の要素がシンボリックリンクや非ディレクトリなら拒否する。確かめた後に途中を差し替える TOCTOU を防ぐため、
-  以後の読み書き（stat / open / rename / link）はすべてこの親 fd を基準に行う。
-- tree_hash(): ディレクトリツリーのハッシュ ger-tree-v1（ZES と共通の定義。docs/design/design.md §11.3）
-- read_file(): 親 fd 基準で通常ファイルを読み、事前の (st_dev, st_ino) と一致することを確かめる
+- resolve(): walks to the target from / one element at a time with O_PATH|O_NOFOLLOW|O_DIRECTORY and returns the fd of the parent directory.
+  Rejects an intermediate element that is a symbolic link or not a directory. To prevent TOCTOU replacement of intermediate elements after the check,
+  every later read and write (stat / open / rename / link) is relative to this parent fd.
+- tree_hash(): hash of a directory tree, ger-tree-v1 (definition shared with ZES; docs/design/design.md §11.3)
+- read_file(): reads a regular file relative to the parent fd and checks that it matches the earlier (st_dev, st_ino)
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
-# O_PATH が無い macOS では読み取りで開く（各ディレクトリに読み取り権限が要る）
+# On macOS without O_PATH, open for reading (each directory needs read permission)
 DIR_FLAGS = (O_PATH if O_PATH else os.O_RDONLY) | O_NOFOLLOW | O_DIRECTORY | O_CLOEXEC
 
 TREE_MAX_ENTRIES = 50000
@@ -29,7 +29,7 @@ EDIT_MAX_BYTES = 1024 * 1024
 
 
 class FsError(Exception):
-    """確かめられない・規則に合わない状態。applied=True は「変更が行われた可能性がある」ことを示す。"""
+    """A state that cannot be checked or breaks the rules. applied=True means "a change may have been made"."""
 
     def __init__(self, message: str, applied: bool = False):
         super().__init__(message)
@@ -49,11 +49,11 @@ def sha256_bytes(data: bytes) -> str:
 
 @dataclass
 class Resolved:
-    """resolve() の結果。parent_fd は呼び出し側が close() で閉じる（FdPool に登録すると一括で閉じる）。"""
+    """Result of resolve(). The caller closes parent_fd with close() (registering it in an FdPool closes all at once)."""
     path: str
     parent_fd: int
     name: str
-    st: os.stat_result | None  # 最後の要素の lstat（存在しなければ None）
+    st: os.stat_result | None  # lstat of the last element (None if it does not exist)
     parent_path: str = ""
 
     def lstat(self) -> os.stat_result:
@@ -82,15 +82,15 @@ class FdPool:
 
 def split_abs(path: str) -> list[str]:
     if not path.startswith("/") or "\0" in path:
-        raise FsError("絶対パスであること（NUL 文字は不可）")
+        raise FsError("must be an absolute path (no NUL characters)")
     parts = [p for p in path.split("/") if p]
     if any(p in (".", "..") for p in parts):
-        raise FsError("パスに . / .. を含めないこと")
+        raise FsError("the path must not contain . / ..")
     return parts
 
 
 def open_dir(path: str) -> int:
-    """path のディレクトリを、途中にシンボリックリンクが無いことを確かめながら開く（O_PATH）。"""
+    """Opens the directory of path (O_PATH), checking that there is no symbolic link on the way."""
     parts = split_abs(path)
     fd = os.open("/", DIR_FLAGS)
     try:
@@ -99,7 +99,7 @@ def open_dir(path: str) -> int:
                 nfd = os.open(p, DIR_FLAGS, dir_fd=fd)
             except OSError as e:
                 if e.errno in (errno.ENOTDIR, errno.ELOOP):
-                    raise FsError(f"パスの途中にシンボリックリンクまたはディレクトリ以外があります: /{p}") from None
+                    raise FsError(f"the path contains a symbolic link or a non-directory: /{p}") from None
                 raise
             os.close(fd)
             fd = nfd
@@ -112,7 +112,7 @@ def open_dir(path: str) -> int:
 def resolve(path: str, must_exist: bool = True) -> Resolved:
     parts = split_abs(path)
     if not parts:
-        raise FsError("/ そのものは対象にできません")
+        raise FsError("/ itself cannot be a target")
     parent = "/" + "/".join(parts[:-1])
     fd = open_dir(parent)
     name = parts[-1]
@@ -144,9 +144,9 @@ def open_file(dir_fd: int, name: str, expect: os.stat_result | None = None) -> i
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
-            raise FsError("通常ファイルではありません")
+            raise FsError("not a regular file")
         if expect is not None and (st.st_dev, st.st_ino) != (expect.st_dev, expect.st_ino):
-            raise FsError("確かめている間に対象が差し替えられました")
+            raise FsError("the target was replaced while it was being checked")
         return fd
     except BaseException:
         os.close(fd)
@@ -159,7 +159,7 @@ def read_file(dir_fd: int, name: str, expect: os.stat_result | None = None, limi
         if limit is not None:
             data = f.read(limit + 1)
             if len(data) > limit:
-                raise FsError(f"ファイルが大きすぎます（上限 {limit} バイト）")
+                raise FsError(f"the file is too large (limit {limit} bytes)")
             return data
         return f.read()
 
@@ -182,15 +182,15 @@ class TreeInfo:
     hash: str
     entries: int
     bytes: int
-    modes: dict  # 相対パス（str, surrogateescape）→ mode（0o7777 でマスク）。シンボリックリンクは含めない
-    kinds: dict  # 相対パス → "f" / "d"
+    modes: dict  # relative path (str, surrogateescape) -> mode (masked with 0o7777). Symbolic links are not included
+    kinds: dict  # relative path -> "f" / "d"
 
 
 def tree_hash(dir_fd: int, name: str, root_dev: int | None = None) -> TreeInfo:
-    """ger-tree-v1。エントリ（ルートは "."）を相対パスのバイト列の昇順に並べ、各行
-    type \\0 relpath \\0 mode(4 桁 8 進) \\0 (ファイル: size \\0 sha256hex / リンク: readlink / ディレクトリ: 空) \\n
-    を連結した SHA-256。mtime / ctime / uid は含めない。
-    エントリ数・合計サイズの上限超過、FIFO・ソケット・デバイス、別の st_dev、st_nlink > 1 の通常ファイルは拒否する。"""
+    """ger-tree-v1. Entries (the root is ".") sorted in ascending order of the relative path bytes, each line being
+    type \\0 relpath \\0 mode(4 octal digits) \\0 (file: size \\0 sha256hex / link: readlink / directory: empty) \\n
+    and the SHA-256 of their concatenation. mtime / ctime / uid are not included.
+    Rejects exceeding the entry count or total size limit, FIFOs, sockets, devices, a different st_dev, and regular files with st_nlink > 1."""
     lines: list[tuple[bytes, bytes]] = []
     modes: dict = {}
     kinds: dict = {}
@@ -200,7 +200,7 @@ def tree_hash(dir_fd: int, name: str, root_dev: int | None = None) -> TreeInfo:
         st0 = os.fstat(top)
         dev = st0.st_dev if root_dev is None else root_dev
         if st0.st_dev != dev:
-            raise FsError("ツリーが別のデバイスにあります")
+            raise FsError("the tree is on a different device")
         lines.append((b".", b"d\0.\0" + f"{st0.st_mode & 0o7777:04o}".encode() + b"\0\n"))
         modes["."] = st0.st_mode & 0o7777
         kinds["."] = "d"
@@ -209,24 +209,24 @@ def tree_hash(dir_fd: int, name: str, root_dev: int | None = None) -> TreeInfo:
         while stack:
             dfd, prefix, depth = stack.pop()
             if depth > TREE_MAX_DEPTH:
-                raise FsError("ツリーが深すぎます")
+                raise FsError("the tree is too deep")
             for n in os.listdir(dfd):
                 rel_b = prefix + os.fsencode(n)
                 rel_s = os.fsdecode(rel_b)
                 st = os.stat(n, dir_fd=dfd, follow_symlinks=False)
                 if st.st_dev != dev:
-                    raise FsError(f"ツリーにマウント境界（別のデバイス）があります: {rel_s}")
+                    raise FsError(f"the tree contains a mount boundary (a different device): {rel_s}")
                 if len(lines) >= TREE_MAX_ENTRIES:
-                    raise FsError(f"ツリーのエントリが多すぎます（上限 {TREE_MAX_ENTRIES}）")
+                    raise FsError(f"the tree has too many entries (limit {TREE_MAX_ENTRIES})")
                 m = f"{st.st_mode & 0o7777:04o}".encode()
                 if stat.S_ISLNK(st.st_mode):
                     lines.append((rel_b, b"l\0" + rel_b + b"\0" + m + b"\0" + os.fsencode(os.readlink(n, dir_fd=dfd)) + b"\n"))
                 elif stat.S_ISREG(st.st_mode):
                     if st.st_nlink > 1:
-                        raise FsError(f"ツリーにハードリンクされたファイルがあります（別名に内容が残るため拒否）: {rel_s}")
+                        raise FsError(f"the tree contains a hard-linked file (rejected because the content would remain under another name): {rel_s}")
                     total += st.st_size
                     if total > TREE_MAX_BYTES:
-                        raise FsError("ツリーの合計サイズが上限（2 GiB）を超えています")
+                        raise FsError("the total size of the tree exceeds the limit (2 GiB)")
                     hx = hash_file(dfd, n, st)[len("sha256:"):]
                     lines.append((rel_b, b"f\0" + rel_b + b"\0" + m + b"\0" + str(st.st_size).encode() + b"\0" + hx.encode() + b"\n"))
                     modes[rel_s] = st.st_mode & 0o7777
@@ -239,7 +239,7 @@ def tree_hash(dir_fd: int, name: str, root_dev: int | None = None) -> TreeInfo:
                     opened.append(cfd)
                     stack.append((cfd, rel_b + b"/", depth + 1))
                 else:
-                    raise FsError(f"ツリーに FIFO・ソケット・デバイスがあります: {rel_s}")
+                    raise FsError(f"the tree contains a FIFO, socket or device: {rel_s}")
         for fd in opened[1:]:
             os.close(fd)
     finally:
@@ -252,12 +252,12 @@ def tree_hash(dir_fd: int, name: str, root_dev: int | None = None) -> TreeInfo:
 
 
 def set_tree_modes(dir_fd: int, name: str, modes: dict) -> None:
-    """modes（相対パス → mode）をツリーに設定する。子を先に、親を後に（親の x を先に落とさない）。"""
+    """Sets modes (relative path -> mode) on the tree. Children first, parents last (the parent's x bit is not dropped first)."""
     order = sorted(modes, key=lambda r: (0 if r == "." else r.count("/") + 1), reverse=True)
     for rel in order:
         mode = modes[rel]
         path = name if rel == "." else name + "/" + rel
-        # パスの途中は GER が作ったストアの中（またはロールバック対象の元の位置）。末尾はリンクを辿らない
+        # Intermediate elements are inside the store GER created (or the original location being rolled back). The last element is not followed
         parts = path.split("/")
         dfd = dir_fd
         opened = []
@@ -290,7 +290,7 @@ def set_tree_modes(dir_fd: int, name: str, modes: dict) -> None:
 
 
 def locked_modes(kinds: dict) -> dict:
-    """隔離後の mode: ファイルは 0400、ディレクトリは 0500（実行ビットと書き込みを落とす）。"""
+    """Mode after quarantine: files 0400, directories 0500 (execute and write bits dropped)."""
     return {rel: (0o500 if k == "d" else 0o400) for rel, k in kinds.items()}
 
 

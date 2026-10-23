@@ -1,18 +1,18 @@
-"""quarantine 操作 — 可逆。対象を隔離ストアへ rename で移す（削除はしない）。
+"""quarantine operation - reversible. Moves the target into the quarantine store with rename (nothing is deleted).
 
 params:
-  self（ファイル）       {"kind": "file", "sha256"}
-  self（ツリー）         {"kind": "tree", "tree_sha256"}
-  self（リンク）         {"kind": "symlink", "link_target"}        リンクそのものを移す。リンク先は辿らない
+  self (file)            {"kind": "file", "sha256"}
+  self (tree)            {"kind": "tree", "tree_sha256"}
+  self (link)            {"kind": "symlink", "link_target"}        moves the link itself; the link target is not followed
   npm_pkg_dir / npm_installed {"kind": "tree", "tree_sha256", "subject": {"name", "version"}}
   pypi_record            {"kind": "tree", "tree_sha256", "record": true}
-                         dist-info と、RECORD に載っていて site-packages の下にある全ファイル（RECORD の sha256 と照合）
+                         the dist-info and every file listed in RECORD under site-packages (checked against the sha256 in RECORD)
   ext_dir / skill_dir    {"kind": "tree", "tree_sha256"}
-前提: 種類が kind と一致する。ファイルは内容の SHA-256 が一致し st_nlink == 1。ツリーは ger-tree-v1 が一致する。
-リンクは readlink の値が一致する。隔離ストアと同じ st_dev にある（違えば拒否。rename が原子的でなくなるため）。
-対象と関係（relation）は GER が現在のファイルシステムから導き直す（G-9）。ZES が検知の根拠にしているメタデータ
-だけを取り除いて実体を残す操作（dist-info だけ、manifest.json だけ等）は拒否する（Q-6）。
-移した後、ファイルは 0400、ディレクトリは 0500 にする（元の mode はマニフェストに残し、戻すときに復元する）。
+Preconditions: the type matches kind. A file must match the SHA-256 of its content and have st_nlink == 1. A tree must match ger-tree-v1.
+A link must match the readlink value. The target must be on the same st_dev as the quarantine store (rejected otherwise, because rename would not be atomic).
+GER derives the target and its relation again from the current file system (G-9). An operation that removes only the metadata
+ZES used as evidence and leaves the code in place (only the dist-info, only manifest.json, and so on) is rejected (Q-6).
+After the move, files become 0400 and directories 0500 (the original mode is kept in the manifest and restored on restore).
 """
 from __future__ import annotations
 
@@ -42,55 +42,55 @@ _EXT = re.compile(r"^(.*/Extensions/[^/]+)(/[^/]+)?/manifest\.json$")
 
 def validate_params(params: dict) -> None:
     if not isinstance(params, dict) or params.get("kind") not in ("file", "tree", "symlink"):
-        raise ActionError('params.kind は "file" / "tree" / "symlink" のいずれか（ger preview で作る）')
+        raise ActionError('params.kind must be one of "file" / "tree" / "symlink" (built by ger preview)')
     k = params["kind"]
     allowed = {"file": {"kind", "sha256"}, "symlink": {"kind", "link_target"},
                "tree": {"kind", "tree_sha256", "subject", "record"}}[k]
     if not set(params) <= allowed:
-        raise ActionError(f"kind={k} の params に使えない項目があります: {sorted(set(params) - allowed)}")
+        raise ActionError(f"params for kind={k} contain fields that cannot be used: {sorted(set(params) - allowed)}")
     if k == "file" and not (isinstance(params.get("sha256"), str) and _SHA.fullmatch(params["sha256"])):
-        raise ActionError("params.sha256 は sha256:<64 桁の 16 進>")
+        raise ActionError("params.sha256 must be sha256:<64 hex digits>")
     if k == "tree" and not (isinstance(params.get("tree_sha256"), str) and _SHA.fullmatch(params["tree_sha256"])):
-        raise ActionError("params.tree_sha256 は sha256:<64 桁の 16 進>（ger-tree-v1）")
+        raise ActionError("params.tree_sha256 must be sha256:<64 hex digits> (ger-tree-v1)")
     if k == "symlink" and not (isinstance(params.get("link_target"), str) and params["link_target"]):
-        raise ActionError("params.link_target は readlink の値（空でない文字列）")
+        raise ActionError("params.link_target must be the readlink value (a non-empty string)")
     if "subject" in params:
         s = params["subject"]
         if not isinstance(s, dict) or set(s) != {"name", "version"} or not isinstance(s["name"], str) \
                 or not (s["version"] is None or isinstance(s["version"], str)):
-            raise ActionError('params.subject は {"name": str, "version": str|null}')
+            raise ActionError('params.subject must be {"name": str, "version": str|null}')
     if "record" in params and params["record"] is not True:
-        raise ActionError("params.record は true のみ")
+        raise ActionError("params.record must be true")
 
 
-# --- 関係（relation）の字句上の条件と、ファイルシステムでの確認（G-9） ------------------------------
+# --- Lexical conditions of the relation, and the check on the file system (G-9) ----------------------
 def lexical_relation(relation: str, target: str, fp: str | None) -> str | None:
-    """問題があれば理由。ZET の I-4 と同じ条件（GER は計画を信用せず自分で確かめる）。"""
+    """A reason if there is a problem. Same conditions as ZET I-4 (GER does not trust the plan and checks by itself)."""
     if relation not in RELATIONS:
-        return f"relation {relation} は quarantine に使えません（{', '.join(RELATIONS)}）"
+        return f"relation {relation} cannot be used for quarantine ({', '.join(RELATIONS)})"
     if fp is None:
-        return "finding_path が null の finding の対象は quarantine できません"
+        return "the target of a finding whose finding_path is null cannot be quarantined"
     if relation == "self":
-        return None if target == fp else "relation self では target が finding_path と一致すること"
+        return None if target == fp else "relation self: target must equal finding_path"
     if relation == "npm_pkg_dir":
         par = posixpath.dirname(target)
         ok = fp == target + "/package.json" and (posixpath.basename(par) == "node_modules" or (
             posixpath.basename(par).startswith("@") and posixpath.basename(posixpath.dirname(par)) == "node_modules"))
-        return None if ok else "npm_pkg_dir: target は node_modules/<name>（scoped は node_modules/@scope/<name>）で、finding_path がその package.json であること"
+        return None if ok else "npm_pkg_dir: target must be node_modules/<name> (scoped: node_modules/@scope/<name>) and finding_path its package.json"
     if relation == "npm_installed":
         base_ = posixpath.dirname(fp) + "/node_modules/"
         ok = posixpath.basename(fp) in LOCKFILES and target.startswith(base_) and _NPM_REST.fullmatch(target[len(base_):])
-        return None if ok else "npm_installed: finding がロックファイルで、target がその隣の node_modules/<name> であること"
+        return None if ok else "npm_installed: the finding must be a lockfile and target the node_modules/<name> next to it"
     if relation == "pypi_record":
         ok = target == fp and posixpath.basename(target).endswith(".dist-info")
-        return None if ok else "pypi_record: target は finding_path の *.dist-info ディレクトリであること"
+        return None if ok else "pypi_record: target must be the *.dist-info directory of finding_path"
     if relation == "ext_dir":
         m = _EXT.match(fp)
-        return None if m and m.group(1) == target else "ext_dir: finding_path が …/Extensions/<id>[/<ver>]/manifest.json で、target が …/Extensions/<id> であること"
+        return None if m and m.group(1) == target else "ext_dir: finding_path must be .../Extensions/<id>[/<ver>]/manifest.json and target .../Extensions/<id>"
     if relation == "skill_dir":
         ok = target == fp or (posixpath.basename(fp) == "skill.contract.json" and posixpath.dirname(fp) == target)
-        return None if ok else "skill_dir: target は finding_path のスキルのディレクトリであること"
-    return "未知の relation"
+        return None if ok else "skill_dir: target must be the skill directory of finding_path"
+    return "unknown relation"
 
 
 def _read_json_in(target: str, rel: str, limit=1 << 20):
@@ -103,13 +103,13 @@ def _read_json_in(target: str, rel: str, limit=1 << 20):
     try:
         return json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        raise ActionError(f"{rel} を JSON として読めません") from None
+        raise ActionError(f"cannot read {rel} as JSON") from None
 
 
 def _npm_subject(target: str) -> dict:
     pj = _read_json_in(target, "package.json")
     if not isinstance(pj, dict) or not isinstance(pj.get("name"), str):
-        raise ActionError("package.json に name がありません")
+        raise ActionError("package.json has no name")
     v = pj.get("version")
     return {"name": pj["name"], "version": v if isinstance(v, str) else None}
 
@@ -120,13 +120,13 @@ def _expected_npm_name(target: str) -> str:
 
 
 def record_members(target: str) -> tuple[list[str], list[str], list[str]]:
-    """(移すメンバー, site-packages の外のメンバー, 存在しないメンバー)。ハッシュが RECORD と違えば ActionError。"""
+    """(members to move, members outside site-packages, missing members). ActionError if a hash differs from RECORD."""
     sp = posixpath.dirname(target)
     try:
         r = fsutil.resolve(target + "/RECORD")
     except FileNotFoundError:
-        raise ActionError("RECORD がありません。dist-info だけを隔離するとコードが残るため quarantine できません"
-                          "（チェックリストで仮想環境を作り直す。Q-6）") from None
+        raise ActionError("RECORD is missing. Quarantining only the dist-info would leave the code in place, so it cannot be quarantined"
+                          " (rebuild the virtual environment with a checklist; Q-6)") from None
     try:
         base.check_regular(r.st, "RECORD")
         raw = fsutil.read_file(r.parent_fd, r.name, r.st, limit=16 << 20)
@@ -135,7 +135,7 @@ def record_members(target: str) -> tuple[list[str], list[str], list[str]]:
     try:
         rows = list(csv.reader(io.StringIO(raw.decode("utf-8"))))
     except (UnicodeDecodeError, csv.Error):
-        raise ActionError("RECORD を CSV として読めません") from None
+        raise ActionError("cannot read RECORD as CSV") from None
     move, outside, missing = [], [], []
     for row in rows:
         if not row or not row[0]:
@@ -147,26 +147,26 @@ def record_members(target: str) -> tuple[list[str], list[str], list[str]]:
             outside.append(full)
             continue
         if fsutil.is_under(full, target):
-            continue  # dist-info の中はツリーごと移す（ツリーハッシュで固定済み）
+            continue  # Inside the dist-info the whole tree is moved (fixed by the tree hash)
         try:
             m = fsutil.resolve(full)
         except FileNotFoundError:
             missing.append(full)
             continue
         except fsutil.FsError as e:
-            raise ActionError(f"RECORD のメンバー {full}: {e}") from None
+            raise ActionError(f"RECORD member {full}: {e}") from None
         try:
-            base.check_regular(m.st, f"RECORD のメンバー {full}")
+            base.check_regular(m.st, f"RECORD member {full}")
             if h:
                 algo, _, b64 = h.partition("=")
                 if algo != "sha256":
-                    raise ActionError(f"RECORD のハッシュが sha256 ではありません: {full}")
+                    raise ActionError(f"RECORD hash is not sha256: {full}")
                 got = fsutil.hash_file(m.parent_fd, m.name, m.st)[len("sha256:"):]
                 want = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).hex()
                 if got != want:
-                    raise ActionError(f"RECORD のメンバーのハッシュが一致しません: {full}")
+                    raise ActionError(f"RECORD member hash does not match: {full}")
             elif not full.endswith(".pyc"):
-                raise ActionError(f"RECORD のメンバーにハッシュがありません: {full}")
+                raise ActionError(f"RECORD member has no hash: {full}")
         finally:
             m.close()
         move.append(full)
@@ -177,15 +177,15 @@ def check_relation_fs(relation: str, target: str, fp: str, params: dict) -> None
     if relation in ("npm_pkg_dir", "npm_installed"):
         subj = params.get("subject")
         if not subj:
-            raise ActionError(f"{relation} には params.subject（name / version）が必要です")
+            raise ActionError(f"{relation} requires params.subject (name / version)")
         cur = _npm_subject(target)
         if cur["name"] != subj["name"] or cur["name"] != _expected_npm_name(target):
-            raise ActionError("node_modules/<name>/package.json の name が params.subject.name・ディレクトリ名と一致しません")
+            raise ActionError("the name in node_modules/<name>/package.json does not match params.subject.name and the directory name")
         if subj["version"] is not None and cur["version"] != subj["version"]:
-            raise ActionError("package.json の version が params.subject.version と一致しません")
+            raise ActionError("the version in package.json does not match params.subject.version")
     elif relation == "pypi_record":
         if params.get("record") is not True:
-            raise ActionError("pypi_record には params.record: true が必要です")
+            raise ActionError("pypi_record requires params.record: true")
         record_members(target)
     elif relation == "ext_dir":
         _read_json_in(target, fp[len(target) + 1:])
@@ -201,10 +201,10 @@ def check_relation_fs(relation: str, target: str, fp: str, params: dict) -> None
             finally:
                 r.close()
         if not found:
-            raise ActionError("skill_dir: ディレクトリに skill.contract.json も SKILL.md もありません")
+            raise ActionError("skill_dir: the directory has neither skill.contract.json nor SKILL.md")
 
 
-# --- ステップ ------------------------------------------------------------------------------------
+# --- Step ----------------------------------------------------------------------------------------
 class QuarantineStep(Step):
     type = TYPE
     order = ORDER
@@ -238,7 +238,7 @@ class QuarantineStep(Step):
         for u in reversed(self.undo.get("entries", [])):
             try:
                 base.move_out(u)
-            except Exception as e:  # 1 件戻せなくても残りは戻す
+            except Exception as e:  # Restore the rest even if one entry cannot be restored
                 errs.append(f"{u['orig']}: {e}")
         if errs:
             raise ActionError("; ".join(errs))
@@ -266,16 +266,16 @@ def _inspect(ctx, path: str, kind: str):
     st = res.st
     k = fsutil.kind_of(st)
     if k == "special":
-        raise ActionError("FIFO・ソケット・デバイスは隔離できません")
+        raise ActionError("a FIFO, socket or device cannot be quarantined")
     if k != kind:
-        raise ActionError(f"対象の種類が {k} です（params.kind は {kind}）")
+        raise ActionError(f"the target type is {k} (params.kind is {kind})")
     if ctx.store_dev is not None and st.st_dev != ctx.store_dev:
-        raise ActionError("対象が隔離ストアと別のデバイス（ファイルシステム）にあります。rename が原子的でないため隔離できません"
-                          "（GER_QUARANTINE_DIR で同じデバイスのストアを指定してください）")
+        raise ActionError("the target is on a different device (file system) from the quarantine store. It cannot be quarantined because rename would not be atomic"
+                          " (set GER_QUARANTINE_DIR to a store on the same device)")
     if ctx.euid != 0 and st.st_uid != ctx.euid and k != "symlink":
-        raise ActionError("所有者ではないため隔離できません")
+        raise ActionError("cannot quarantine: not the owner")
     if k == "tree" and ctx.euid != 0 and not st.st_mode & 0o200:
-        raise ActionError("書き込み権限の無いディレクトリは別の場所へ移せません")
+        raise ActionError("an entry in a directory without write permission cannot be moved elsewhere")
     tree = None
     if k == "file":
         base.check_regular(st)
@@ -289,9 +289,9 @@ def _inspect(ctx, path: str, kind: str):
 
 
 def _relations(items) -> list[tuple[str, str | None]]:
-    """group の各 item の (relation, finding_path)。findings 1.1 では 1 つの対象に finding_path の違う finding が
-    まとまる（スキルのディレクトリと skill.contract.json、node_modules/<name>/package.json とロックファイル）。
-    1 件目だけでなく全件の関係を確かめる（G-9）。"""
+    """(relation, finding_path) of each item of the group. With findings 1.1, findings with different finding_path values are
+    grouped on one target (a skill directory and skill.contract.json, node_modules/<name>/package.json and a lockfile).
+    The relation of every item is checked, not only the first (G-9)."""
     out = []
     for it in items:
         a = it.action
@@ -311,7 +311,7 @@ def _check_kind(target: str, rels, kind: str) -> None:
             if why:
                 raise ActionError(f"Q-6: {why}")
         elif kind != "tree":
-            raise ActionError(f"relation {rel} の対象はディレクトリ（kind: tree）です")
+            raise ActionError(f"the target of relation {rel} is a directory (kind: tree)")
 
 
 def prepare(ctx, items):
@@ -332,7 +332,7 @@ def prepare(ctx, items):
         check_relation_fs(rel, target, fp, params)
     res, digest, tree = _inspect(ctx, target, params["kind"])
     if digest != _pin_of(params):
-        raise ActionError("対象の内容が preview（承認）の時から変わっています（ハッシュ・リンク先が params と不一致）")
+        raise ActionError("the target content changed since preview (approval) (hash or link target does not match params)")
     moves = []
     if relation == "pypi_record":
         members, _outside, _missing = record_members(target)
@@ -352,7 +352,7 @@ def preview(ctx, items) -> PreviewResult:
     res = ctx.pool.add(fsutil.resolve(target))
     kind = fsutil.kind_of(res.st)
     if kind == "special":
-        raise ActionError("FIFO・ソケット・デバイスは隔離できません")
+        raise ActionError("a FIFO, socket or device cannot be quarantined")
     if "self" in names:
         why = hazards.metadata_only(target, kind)
         if why:
@@ -380,9 +380,9 @@ def preview(ctx, items) -> PreviewResult:
         members, outside, missing = record_members(target)
         summary += f"; RECORD: move {len(members)} files"
         if outside:
-            summary += f"; site-packages の外（移さない・要手作業）: {', '.join(outside)}"
+            summary += f"; outside site-packages (not moved, manual work required): {', '.join(outside)}"
         if missing:
-            summary += f"; 存在しない: {len(missing)} 件"
+            summary += f"; missing: {len(missing)}"
     validate_params(params)
     return PreviewResult(params, f"{relation}: {target} → store ({summary})")
 

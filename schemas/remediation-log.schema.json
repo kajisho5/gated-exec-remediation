@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/kajisho5/gated-exec-remediation/schemas/remediation-log.schema.json",
   "title": "GER remediation-log.json",
-  "description": "GER（修復層）の出力契約。GER が所有する。契約 §6 に mode と plan_hash を追加（どの計画のどの実行かを一意にするため）。1.1 で result に pending_manual（checklist）を、results に group / quarantine_ids / followup を追加し、mode に restore 系と recover を追加。restore では plan_id が restore_id、plan_hash が restore-request の承認トークン。",
+  "description": "Output contract of GER (remediation layer). Owned by GER. Adds mode and plan_hash to contract §6 (to identify which run of which plan). 1.1 adds pending_manual (checklist) to result, group / quarantine_ids / followup to results, and the restore modes and recover to mode. For restore, plan_id is the restore_id and plan_hash is the approval token of the restore-request.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "plan_id", "plan_hash", "mode", "started_at", "finished_at", "status", "results"],
@@ -30,8 +30,8 @@
           "reason": { "type": "string" },
           "applied_at": { "anyOf": [{ "$ref": "#/$defs/ts" }, { "type": "null" }] },
           "group": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
-          "quarantine_ids": { "type": "array", "items": { "type": "string" }, "description": "隔離ストアのエントリ（隔離したもの・編集前のバックアップ）。ger restore で戻せる" },
-          "followup": { "type": "array", "items": { "type": "string", "pattern": "^CL-[A-Z0-9-]{1,32}$" }, "description": "自動修復の後に残る必須の手作業（ger confirm で記録する）" }
+          "quarantine_ids": { "type": "array", "items": { "type": "string" }, "description": "Quarantine store entries (quarantined objects, backups from before an edit). Can be moved back with ger restore" },
+          "followup": { "type": "array", "items": { "type": "string", "pattern": "^CL-[A-Z0-9-]{1,32}$" }, "description": "Required manual work left after automatic remediation (recorded with ger confirm)" }
         }
       }
     }

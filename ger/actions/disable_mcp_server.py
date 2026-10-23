@@ -1,12 +1,12 @@
-"""disable_mcp_server 操作 — edit_json / edit_toml の preset。可逆。
+"""disable_mcp_server operation - a preset of edit_json / edit_toml. Reversible.
 
-MCP サーバーの定義だけを取り除く。JSON / JSONC は pointer を /mcpServers/<name>、/servers/<name>（VS Code）、
-/projects/<p>/mcpServers/<name>（~/.claude.json）に限る。TOML（Codex の .codex/config.toml）は [mcp_servers.<name>]
-（Phase 1 の範囲: 標準のテーブルヘッダで定義されたもの）に限る。取り除いた定義はバックアップから戻せる（ger restore）。
+Removes only MCP server definitions. For JSON / JSONC the pointer is limited to /mcpServers/<name>, /servers/<name> (VS Code),
+/projects/<p>/mcpServers/<name> (~/.claude.json). For TOML (Codex .codex/config.toml) it is limited to [mcp_servers.<name>]
+(Phase 1 scope: defined with a standard table header). A removed definition can be restored from the backup (ger restore).
 
 params: {"format": "json"|"jsonc"|"toml", "ops": [...], "file_sha256", "expected_after_sha256"}
-  json / jsonc の ops: [{"op": "remove", "pointer", "before_sha256"}]
-  toml の ops: [{"op": "remove_table", "key_path": ["mcp_servers", "<name>"], "before_sha256"}]
+  json / jsonc ops: [{"op": "remove", "pointer", "before_sha256"}]
+  toml ops: [{"op": "remove_table", "key_path": ["mcp_servers", "<name>"], "before_sha256"}]
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ ORDER = 0
 
 def validate_params(params: dict) -> None:
     if not isinstance(params, dict) or params.get("format") not in ("json", "jsonc", "toml"):
-        raise ActionError("params.format は json / jsonc / toml のいずれか")
+        raise ActionError("params.format must be one of json / jsonc / toml")
     if params["format"] == "toml":
         rest = {k: v for k, v in params.items() if k != "format"}
         edit_toml.validate_params(rest)
@@ -35,7 +35,7 @@ def _compute(fmt):
         if fmt == "toml":
             for o in ops:
                 if hazards.toml_hazard(path, o["key_path"]) != "mcp.server.toml":
-                    raise ActionError("disable_mcp_server が取り除けるのは [mcp_servers.<name>] だけです（T-1）")
+                    raise ActionError("disable_mcp_server can remove only [mcp_servers.<name>] (T-1)")
             return edit_toml.compute(path, data, ops)
         return edit_json.compute(path, data, fmt, ops, allowed_h=hazards.MCP_PRESET)
     return f
@@ -52,7 +52,7 @@ def preview(ctx, items) -> PreviewResult:
         params, summary, diff = edit_toml.preview_compute(ctx, items)
         params = {"format": "toml", **params}
     else:
-        for it in items:  # select は MCP サーバーだけ
+        for it in items:  # select covers MCP servers only
             if "select" in it.action["params"]:
                 it.action["params"]["select"] = "mcp.server"
         params, summary, diff = edit_json.preview_compute(ctx, items, hazards.MCP_PRESET, allowed_h=hazards.MCP_PRESET)

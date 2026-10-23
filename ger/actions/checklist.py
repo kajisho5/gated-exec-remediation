@@ -1,12 +1,12 @@
-"""checklist 操作 — GER はファイルを変えない。
+"""checklist operation - GER does not change files.
 
 params: {"template": "CL-PKG", "steps": [{"id": "s1", "text": "…", "blocking": true}],
          "verify"?: {"kind": "path_absent" | "file_hash_changed" | "self_attested"}}
-apply の結果は pending_manual。作業者が ger confirm で手順ごとに確認を記録する（監査ログに追記）。
-verify にローカルで確かめられる条件があれば GER が確かめてから記録する。ローテーションのような外部の作業は
-「本人が確認した」（self_attested）とだけ記録し、「検証済み」とは呼ばない。target は null を許す。
+The apply result is pending_manual. The worker records each step with ger confirm (appended to the audit log).
+If verify has a condition that can be checked locally, GER checks it before recording. External work such as a rotation
+is recorded only as "confirmed by the person" (self_attested) and is never called "verified". target may be null.
 
-同じ形の手順（{template, steps}）は、自動修復の action に action.followup として付けられる（必須の後続作業）。
+Steps of the same shape ({template, steps}) can be attached to an automatic remediation action as action.followup (required follow-up work).
 """
 from __future__ import annotations
 
@@ -25,31 +25,31 @@ VERIFY_KINDS = ("path_absent", "file_hash_changed", "self_attested")
 
 def validate_steps(obj: dict, label: str = "params") -> None:
     if not isinstance(obj.get("template"), str) or not _TEMPLATE.fullmatch(obj["template"]):
-        raise ActionError(f"{label}.template は CL-XXX 形式であること")
+        raise ActionError(f"{label}.template must have the form CL-XXX")
     steps = obj.get("steps")
     if not isinstance(steps, list) or not 1 <= len(steps) <= 64:
-        raise ActionError(f"{label}.steps は 1〜64 件であること")
+        raise ActionError(f"{label}.steps must have 1-64 entries")
     ids = set()
     for s in steps:
         if not isinstance(s, dict) or set(s) != {"id", "text", "blocking"}:
-            raise ActionError(f'{label}.steps[] は {{"id", "text", "blocking"}} であること')
+            raise ActionError(f'{label}.steps[] must be {{"id", "text", "blocking"}}')
         if not isinstance(s["id"], str) or not _STEP_ID.fullmatch(s["id"]) or s["id"] in ids:
-            raise ActionError(f"{label}.steps[].id は s<数字> で重複しないこと")
+            raise ActionError(f"{label}.steps[].id must be s<digits> and unique")
         ids.add(s["id"])
         if not isinstance(s["text"], str) or not 1 <= len(s["text"]) <= 2000:
-            raise ActionError(f"{label}.steps[].text は 1〜2000 文字")
+            raise ActionError(f"{label}.steps[].text must be 1-2000 characters")
         if not isinstance(s["blocking"], bool):
-            raise ActionError(f"{label}.steps[].blocking は真偽値")
+            raise ActionError(f"{label}.steps[].blocking must be a boolean")
 
 
 def validate_params(params: dict) -> None:
     if not isinstance(params, dict) or not set(params) <= {"template", "steps", "verify"}:
-        raise ActionError('params は {"template", "steps", "verify"?} であること')
+        raise ActionError('params must be {"template", "steps", "verify"?}')
     validate_steps(params)
     if "verify" in params:
         v = params["verify"]
         if not isinstance(v, dict) or set(v) != {"kind"} or v["kind"] not in VERIFY_KINDS:
-            raise ActionError(f"params.verify は {{\"kind\": {' | '.join(VERIFY_KINDS)}}}")
+            raise ActionError(f"params.verify must be {{\"kind\": {' | '.join(VERIFY_KINDS)}}}")
 
 
 class ChecklistStep(Step):
@@ -75,4 +75,4 @@ def prepare(ctx, items):
 def preview(ctx, items) -> PreviewResult:
     p = items[0].action["params"]
     validate_params(p)
-    return PreviewResult(p, f"checklist {p['template']}（{len(p['steps'])} 手順。GER はファイルを変えない）")
+    return PreviewResult(p, f"checklist {p['template']} (steps: {len(p['steps'])}; GER does not change files)")
