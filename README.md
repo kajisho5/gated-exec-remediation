@@ -84,15 +84,15 @@ bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode �
 
 ## 監査ログ
 
-`$GER_LOG_DIR/ger-audit.jsonl`。1 行 1 レコード（command / operator / plan_id / plan_hash / input_hash / output_hash / started_at / finished_at / result / gate_failed / prev_hash）。拒否も記録します。ログに書けない場合は実行しません。
+`$GER_LOG_DIR/ger-audit.jsonl`。1 行 1 レコード（command / operator / plan_id / plan_hash / input_hash / output_hash / started_at / finished_at / result / gate_failed / prev_hash）。拒否も記録します。ログに書けない場合は実行しません。既存のログディレクトリが実行ユーザーの所有でない、またはグループ・他者から書き込み可能な場合も実行しません（終了コード 64）。
 
 ## テスト
 
 ```bash
-tests/run-tests.sh   # 単体テスト（31 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
+tests/run-tests.sh   # 単体テスト（41 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
 ```
 
-root で実行すると「読めないファイル（0000）」のテストは SKIP になります（一般ユーザーでは 31 件すべて実行）。ZET が確定した実際の計画（`tests/fixtures/zet-final-plan.json`）で、スキーマと plan_hash の互換性も確認しています。
+root で実行すると「読めないファイル（0000）」のテストは SKIP になります（一般ユーザーでは 41 件すべて実行）。ZET が確定した実際の計画（`tests/fixtures/zet-final-plan.json`）で、スキーマと plan_hash の互換性も確認しています。
 
 ## ライセンス
 

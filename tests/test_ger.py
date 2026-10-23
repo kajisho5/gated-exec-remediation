@@ -502,6 +502,19 @@ class TestExecution(Base):
         self.assertEqual(self.ger("verify", self.ger_input())[0], 64)
         self.assertEqual(other.read_text(), "")
 
+    def test_audit_dir_must_be_private_and_owned(self):
+        d = audit.log_dir(); d.mkdir()
+        for m in (0o777, 0o730, 0o702):
+            os.chmod(d, m)
+            code, err = self.ger("verify", self.ger_input())
+            self.assertEqual(code, 64, err); self.assertIn("書き込み可能", err)
+        os.chmod(d, 0o700)
+        with mock.patch.object(audit.os, "geteuid", return_value=os.geteuid() + 1):
+            code, err = self.ger("verify", self.ger_input())
+        self.assertEqual(code, 64, err); self.assertIn("所有者", err)
+        self.assertFalse(audit.log_path().exists())
+        self.assertEqual(self.ger("verify", self.ger_input())[0], 0)
+
     def test_audit_records_every_command(self):
         self.dry_then_apply(self.ger_input())
         self.ger("verify", self.ger_input(allowed=()))

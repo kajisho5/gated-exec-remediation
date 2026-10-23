@@ -26,6 +26,11 @@ def log_path() -> Path:
 def ensure_writable() -> None:
     d = log_dir()
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    st = os.stat(d)
+    if st.st_uid != os.geteuid():  # 他人のディレクトリでは記録を差し替えられうる
+        raise PermissionError(f"監査ログのディレクトリの所有者が実行ユーザーではありません: {d}")
+    if st.st_mode & 0o022:
+        raise PermissionError(f"監査ログのディレクトリがグループ・他者から書き込み可能です: {d}")
     if not os.access(d, os.W_OK):
         raise PermissionError(f"監査ログに書き込めません: {d}")
     if log_path().is_symlink():
