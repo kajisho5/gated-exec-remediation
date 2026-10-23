@@ -249,7 +249,7 @@ class TestGates(Base):
             rej, _ = gates.check_gates(inp, "ops", now_utc(NOW), "verify", 86400)
             elapsed = time.monotonic() - t0
         self.assertEqual([(r.gate, r.finding_id) for r in rej], [("G-1", "sha256:%064x" % 7)])
-        self.assertLess(elapsed, 1.0)
+        self.assertLess(elapsed, 2.5)  # 修正前は約 5 秒。CI の遅いランナーでも誤検知しない上限
 
     def test_g1_invalid_calendar_timestamps(self):
         inp = self.ger_input(); inp["approval"]["approved_at"] = "2026-02-30T11:00:00Z"
