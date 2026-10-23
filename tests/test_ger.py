@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import dataclasses
 import datetime as dt
 import hashlib
 import io
@@ -133,6 +132,22 @@ class TestVendorAndCompat(Base):
         self.assertEqual(validator("vendor/remediation-plan.schema.json").errors(plan), [])
         self.assertEqual(plan_hash(plan), plan["plan_hash"], "plan_hash の定義が ZET と一致しません")
 
+    def test_zet_plan_11_passes_schema_and_reverified_invariants(self):
+        # ZET 0.2 の finalize の実出力（plan 1.1: scope / relation / finding_path / group / evidence / followup、
+        # checklist、ger preview が埋めた params）。ZES の chaindrop フィクスチャの E2E で作り、パスを /srv/zes-fixtures に
+        # 置き換えて plan_hash を計算し直したもの
+        plan = json.loads((FIX / "zet-final-plan-11.json").read_text())
+        self.assertEqual(plan["schema_version"], "1.1")
+        self.assertEqual(validator("vendor/remediation-plan.schema.json").errors(plan), [])
+        self.assertEqual(plan_hash(plan), plan["plan_hash"])
+        self.assertEqual(gates._zet_invariants(plan, now_utc(plan["created_at"])), [])
+        for it in plan["items"]:
+            a = it["action"]
+            if a:
+                self.assertEqual(validator("actions.schema.json").errors({"type": a["type"], "params": a["params"]}), [])
+        self.assertTrue(any(it["action"] and it["action"].get("group") for it in plan["items"]))
+        self.assertTrue(any(it["action"] and it["action"].get("followup") for it in plan["items"]))
+
     def test_zet_r3_finalized_plan_passes_reverified_invariants(self):
         # ZET（round 3 以降）の finalize の実出力: items[].skillpact と action.evidence_hash を持つ。
         # G-1 で再検査する ZET の不変条件に、正しく作られた計画が引っかからないこと
@@ -193,7 +208,7 @@ class TestGates(Base):
 
     def test_g3_approval_binding(self):
         inp = self.ger_input()
-        inp["plan"]["items"][0]["action"]["target"] = "/etc/passwd"  # 承認後の差し替え
+        inp["plan"]["items"][0]["action"]["target"] = str(self.d / "other")  # 承認後の差し替え
         self.assertRejected(inp, "G-3")
         inp = self.ger_input(); inp["approval"]["plan_id"] = "99999999-2222-4333-8444-555555555555"
         self.assertRejected(inp, "G-3")
@@ -250,7 +265,7 @@ class TestGates(Base):
         (self.d / "dirlink").symlink_to(sub)
         self.assertRejected(self.ger_input(plan=self.plan([self.d / "dirlink" / "f"])), "G-7")
         p = self.plan(); p["items"][0]["action"]["params"] = {"mode": "4755"}; p["plan_hash"] = plan_hash(p)
-        self.assertRejected(self.ger_input(plan=p), "G-7")
+        self.assertRejected(self.ger_input(plan=p), "G-1")  # params は G-1（actions.schema.json）で検証する
         fifo = self.d / "fifo"; os.mkfifo(fifo)
         self.assertRejected(self.ger_input(plan=self.plan([fifo])), "G-7")
 
@@ -463,7 +478,8 @@ class TestExecution(Base):
         # 同じ finding_id の item があっても、ロールバック結果を別の item に書き込まないこと
         rej, prepared = gates.check_gates(self.ger_input(mode="apply"), "ops", now_utc(NOW), "verify", 86400)
         self.assertEqual(rej, [])
-        prepared = [dataclasses.replace(p, finding_id=FID[0] if i != 1 else FID[1]) for i, p in enumerate(prepared)]
+        for i, s in enumerate(prepared):
+            s.items[0].finding_id = FID[0] if i != 1 else FID[1]
         real, calls = chmod.set_mode, {"n": 0}
 
         def flaky(target, mode, ident):
@@ -752,8 +768,8 @@ class TestRegressionsR3Fixes(Base):
             p = self.plan(); p["items"][0]["action"]["params"]["mode"] = mode
             code, err = self.ger("verify", self.ger_input(plan=self.rehash(p)))
             self.assertEqual(code == 0, ok, (oct(before), mode, err))
-            if not ok:
-                self.assertIn("G-7", err)
+            if not ok:  # 静的に分かる world-writable は G-1（params の検査）、現在の mode に権限を足すものは G-7
+                self.assertIn("G-1" if int(mode, 8) & 0o002 else "G-7", err)
                 self.assertTrue("権限" in err or "world-writable" in err, err)
             self.assertEqual(mode_of(self.targets[0]), before)
         os.chmod(self.targets[0], 0o644)

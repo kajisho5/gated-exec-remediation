@@ -1,0 +1,572 @@
+{
+  "created_at": "2026-10-23T10:06:43Z",
+  "held": [
+    {
+      "finding_id": null,
+      "module": "§6",
+      "reason": "scan_error:skipped_offline"
+    }
+  ],
+  "items": [
+    {
+      "action": {
+        "evidence": {
+          "hash": "sha256:e9460f5b9ed5649ac475065188ccae7518ef1093ae90ed58f5dcb36ca7285d4a",
+          "kind": "file"
+        },
+        "finding_path": "/srv/zes-fixtures/chaindrop/package.json",
+        "followup": [
+          {
+            "steps": [
+              {
+                "blocking": true,
+                "id": "s1",
+                "text": "隔離・修復した時刻を記録し、この端末をネットワークから切り離すかどうかを判断する。対象: /srv/zes-fixtures/chaindrop/package.json"
+              },
+              {
+                "blocking": true,
+                "id": "s2",
+                "text": "CL-SECRET を実施する"
+              },
+              {
+                "blocking": true,
+                "id": "s3",
+                "text": "同じ campaign の他の痕跡を zes-scan.sh --full で確かめる"
+              },
+              {
+                "blocking": true,
+                "id": "s4",
+                "text": "再構築するかどうかを判断する（ルートキットや永続化の痕跡があれば再構築を勧める）。GER の修復はインシデントの終わりを意味しない"
+              }
+            ],
+            "template": "CL-IR"
+          }
+        ],
+        "group": "g-3159eca276abc342",
+        "params": {
+          "expected_after_sha256": "sha256:5458aca78f6329180d13f05ebeb05771de894ccea8ceb3fcdc55adca400484a9",
+          "file_sha256": "sha256:e9460f5b9ed5649ac475065188ccae7518ef1093ae90ed58f5dcb36ca7285d4a",
+          "format": "json",
+          "ops": [
+            {
+              "before_sha256": "sha256:1692a60019111c6a030dea41608380c003f6433d489d1cf6362608abea7a35a1",
+              "op": "remove",
+              "pointer": "/scripts/preinstall"
+            }
+          ]
+        },
+        "relation": "self",
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/chaindrop/package.json",
+        "type": "edit_json"
+      },
+      "approved_by": [
+        "sec-a"
+      ],
+      "decided_at": "2026-10-23T10:06:43Z",
+      "decided_by": "alice",
+      "decision": "remediate",
+      "due_at": "2026-11-22T10:06:43Z",
+      "exception_type": null,
+      "finding_id": "sha256:7f49f526a7214a568bebc21cc761872c4c5a2aa83342a741d37ebb1a86e1e0c4",
+      "level_effective": "HIGH",
+      "owner": "team-sec",
+      "reason": null,
+      "recheck_at": null
+    },
+    {
+      "action": null,
+      "approved_by": [],
+      "decided_at": "2026-10-23T10:06:43Z",
+      "decided_by": "alice",
+      "decision": "defer",
+      "due_at": null,
+      "exception_type": null,
+      "finding_id": "sha256:2f161a9607b2adbf45f57a58feb14fe541452cd3d32213ccd587f0ba675ca919",
+      "level_effective": "INFO",
+      "owner": null,
+      "reason": "informational",
+      "recheck_at": "2026-11-22T10:06:43Z"
+    },
+    {
+      "action": {
+        "evidence": {
+          "hash": "sha256:e9460f5b9ed5649ac475065188ccae7518ef1093ae90ed58f5dcb36ca7285d4a",
+          "kind": "file"
+        },
+        "finding_path": "/srv/zes-fixtures/chaindrop/package.json",
+        "followup": [
+          {
+            "steps": [
+              {
+                "blocking": true,
+                "id": "s1",
+                "text": "隔離・修復した時刻を記録し、この端末をネットワークから切り離すかどうかを判断する。対象: /srv/zes-fixtures/chaindrop/package.json"
+              },
+              {
+                "blocking": true,
+                "id": "s2",
+                "text": "CL-SECRET を実施する"
+              },
+              {
+                "blocking": true,
+                "id": "s3",
+                "text": "同じ campaign の他の痕跡を zes-scan.sh --full で確かめる"
+              },
+              {
+                "blocking": true,
+                "id": "s4",
+                "text": "再構築するかどうかを判断する（ルートキットや永続化の痕跡があれば再構築を勧める）。GER の修復はインシデントの終わりを意味しない"
+              }
+            ],
+            "template": "CL-IR"
+          }
+        ],
+        "group": "g-3159eca276abc342",
+        "params": {
+          "expected_after_sha256": "sha256:5458aca78f6329180d13f05ebeb05771de894ccea8ceb3fcdc55adca400484a9",
+          "file_sha256": "sha256:e9460f5b9ed5649ac475065188ccae7518ef1093ae90ed58f5dcb36ca7285d4a",
+          "format": "json",
+          "ops": [
+            {
+              "before_sha256": "sha256:1692a60019111c6a030dea41608380c003f6433d489d1cf6362608abea7a35a1",
+              "op": "remove",
+              "pointer": "/scripts/preinstall"
+            }
+          ]
+        },
+        "relation": "self",
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/chaindrop/package.json",
+        "type": "edit_json"
+      },
+      "approved_by": [
+        "sec-a"
+      ],
+      "decided_at": "2026-10-23T10:06:43Z",
+      "decided_by": "alice",
+      "decision": "remediate",
+      "due_at": "2026-10-30T10:06:43Z",
+      "exception_type": null,
+      "finding_id": "sha256:a57f150374fdbe03c1e77eae1fa3821590e226704bad79c34f6ea5b09aa7eb3b",
+      "level_effective": "CRITICAL",
+      "owner": "team-sec",
+      "reason": null,
+      "recheck_at": null
+    },
+    {
+      "action": {
+        "evidence": {
+          "hash": "sha256:01276ce6141def02187ce126df28a07a35768cf2328dd94c890e56ee8ce90870",
+          "kind": "file"
+        },
+        "finding_path": "/srv/zes-fixtures/chaindrop/setup.mjs",
+        "followup": [
+          {
+            "steps": [
+              {
+                "blocking": true,
+                "id": "s1",
+                "text": "隔離・修復した時刻を記録し、この端末をネットワークから切り離すかどうかを判断する。対象: /srv/zes-fixtures/chaindrop/setup.mjs"
+              },
+              {
+                "blocking": true,
+                "id": "s2",
+                "text": "CL-SECRET を実施する"
+              },
+              {
+                "blocking": true,
+                "id": "s3",
+                "text": "同じ campaign の他の痕跡を zes-scan.sh --full で確かめる"
+              },
+              {
+                "blocking": true,
+                "id": "s4",
+                "text": "再構築するかどうかを判断する（ルートキットや永続化の痕跡があれば再構築を勧める）。GER の修復はインシデントの終わりを意味しない"
+              }
+            ],
+            "template": "CL-IR"
+          },
+          {
+            "steps": [
+              {
+                "blocking": true,
+                "id": "s1",
+                "text": "この端末・作業ツリーから読めた認証情報（§14 の一覧と finding の path）を、提供元ですべて失効させる（GitHub PAT: Settings → Developer settings → Revoke、npm: npm token revoke、AWS: IAM でアクセスキーを無効化・削除、SSH 鍵: authorized_keys と GitHub の SSH keys から削除）"
+              },
+              {
+                "blocking": true,
+                "id": "s2",
+                "text": "新しい認証情報を、侵害されていない端末で発行する"
+              },
+              {
+                "blocking": true,
+                "id": "s3",
+                "text": "提供元の監査ログで、失効までの不正使用がなかったかを確かめる"
+              },
+              {
+                "blocking": false,
+                "id": "s4",
+                "text": "git 履歴に入っていれば、履歴の書き換えか失効だけで済ませるかを決めて記録する（GER は履歴を書き換えない）"
+              }
+            ],
+            "template": "CL-SECRET"
+          }
+        ],
+        "group": "g-468dfcf0404907a0",
+        "params": {
+          "kind": "file",
+          "sha256": "sha256:01276ce6141def02187ce126df28a07a35768cf2328dd94c890e56ee8ce90870"
+        },
+        "relation": "self",
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/chaindrop/setup.mjs",
+        "type": "quarantine"
+      },
+      "approved_by": [
+        "sec-a"
+      ],
+      "decided_at": "2026-10-23T10:06:43Z",
+      "decided_by": "alice",
+      "decision": "remediate",
+      "due_at": "2026-11-22T10:06:43Z",
+      "exception_type": null,
+      "finding_id": "sha256:96c1ff01aaf733417eac71c53fc90255e5730ca8fc3013a1242cbc5c5ac1b43a",
+      "level_effective": "HIGH",
+      "owner": "team-sec",
+      "reason": null,
+      "recheck_at": null
+    },
+    {
+      "action": {
+        "evidence": {
+          "hash": "sha256:95f589a2f0eb7a7c60a6cc6f21e5535fad8cdc709ac228e9469dc2a4ab2da61c",
+          "kind": "file"
+        },
+        "finding_path": "/srv/zes-fixtures/chaindrop/Math_Symbol.js",
+        "followup": [
+          {
+            "steps": [
+              {
+                "blocking": true,
+                "id": "s1",
+                "text": "隔離・修復した時刻を記録し、この端末をネットワークから切り離すかどうかを判断する。対象: /srv/zes-fixtures/chaindrop/Math_Symbol.js"
+              },
+              {
+                "blocking": true,
+                "id": "s2",
+                "text": "CL-SECRET を実施する"
+              },
+              {
+                "blocking": true,
+                "id": "s3",
+                "text": "同じ campaign の他の痕跡を zes-scan.sh --full で確かめる"
+              },
+              {
+                "blocking": true,
+                "id": "s4",
+                "text": "再構築するかどうかを判断する（ルートキットや永続化の痕跡があれば再構築を勧める）。GER の修復はインシデントの終わりを意味しない"
+              }
+            ],
+            "template": "CL-IR"
+          },
+          {
+            "steps": [
+              {
+                "blocking": true,
+                "id": "s1",
+                "text": "この端末・作業ツリーから読めた認証情報（§14 の一覧と finding の path）を、提供元ですべて失効させる（GitHub PAT: Settings → Developer settings → Revoke、npm: npm token revoke、AWS: IAM でアクセスキーを無効化・削除、SSH 鍵: authorized_keys と GitHub の SSH keys から削除）"
+              },
+              {
+                "blocking": true,
+                "id": "s2",
+                "text": "新しい認証情報を、侵害されていない端末で発行する"
+              },
+              {
+                "blocking": true,
+                "id": "s3",
+                "text": "提供元の監査ログで、失効までの不正使用がなかったかを確かめる"
+              },
+              {
+                "blocking": false,
+                "id": "s4",
+                "text": "git 履歴に入っていれば、履歴の書き換えか失効だけで済ませるかを決めて記録する（GER は履歴を書き換えない）"
+              }
+            ],
+            "template": "CL-SECRET"
+          }
+        ],
+        "params": {
+          "kind": "file",
+          "sha256": "sha256:95f589a2f0eb7a7c60a6cc6f21e5535fad8cdc709ac228e9469dc2a4ab2da61c"
+        },
+        "relation": "self",
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/chaindrop/Math_Symbol.js",
+        "type": "quarantine"
+      },
+      "approved_by": [
+        "sec-a"
+      ],
+      "decided_at": "2026-10-23T10:06:43Z",
+      "decided_by": "alice",
+      "decision": "remediate",
+      "due_at": "2026-11-22T10:06:43Z",
+      "exception_type": null,
+      "finding_id": "sha256:553a4225fd60186c384e706ea6ea7614769858fda27c55d0c5ff389edb1eb67d",
+      "level_effective": "HIGH",
+      "owner": "team-sec",
+      "reason": null,
+      "recheck_at": null
+    },
+    {
+      "action": {
+        "evidence": {
+          "hash": "sha256:3469589bb241631f9a01e92e47901b43f247b7aa9e36426b334b30f077c4cc66",
+          "kind": "file"
+        },
+        "finding_path": "/srv/zes-fixtures/chaindrop/package-lock.json",
+        "params": {
+          "steps": [
+            {
+              "blocking": true,
+              "id": "s1",
+              "text": "この作業ツリーで npm ci / npm install / pip install -r / bundle install を実行しない（ロックファイルが侵害版・脆弱版を再び取得する）。対象: /srv/zes-fixtures/chaindrop/package-lock.json"
+            },
+            {
+              "blocking": true,
+              "id": "s2",
+              "text": "~/.npmrc に ignore-scripts=true、環境変数に PIP_REQUIRE_VIRTUALENV=true と PYTHONNOUSERSITE=1 を設定する"
+            },
+            {
+              "blocking": true,
+              "id": "s3",
+              "text": "依存の指定を安全版・修正版に変え、秘密情報の無い隔離環境でロックファイルを再生成する（npm install --ignore-scripts / poetry lock / uv lock / bundle lock --update / cargo update -p など）"
+            },
+            {
+              "blocking": true,
+              "id": "s4",
+              "text": "npm ls <name> / pip show / bundle info / cargo tree で侵害版・脆弱版が残っていないことを確かめる"
+            },
+            {
+              "blocking": true,
+              "id": "s5",
+              "text": "侵害版がインストール・実行された可能性があれば CL-SECRET を実施する"
+            },
+            {
+              "blocking": true,
+              "id": "s6",
+              "text": "ZES で再スキャンし、この finding が消えたことを確かめる"
+            }
+          ],
+          "template": "CL-PKG"
+        },
+        "relation": "self",
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/chaindrop/package-lock.json",
+        "type": "checklist"
+      },
+      "approved_by": [
+        "sec-a"
+      ],
+      "decided_at": "2026-10-23T10:06:43Z",
+      "decided_by": "alice",
+      "decision": "remediate",
+      "due_at": "2026-10-30T10:06:43Z",
+      "exception_type": null,
+      "finding_id": "sha256:051b5f7a261a0a5ee14d8abebf90ac83e055d7f2030ee5d480be1d764f516d0c",
+      "level_effective": "CRITICAL",
+      "owner": "team-sec",
+      "reason": null,
+      "recheck_at": null
+    },
+    {
+      "action": {
+        "evidence": {
+          "hash": "sha256:3469589bb241631f9a01e92e47901b43f247b7aa9e36426b334b30f077c4cc66",
+          "kind": "file"
+        },
+        "finding_path": "/srv/zes-fixtures/chaindrop/package-lock.json",
+        "params": {
+          "steps": [
+            {
+              "blocking": true,
+              "id": "s1",
+              "text": "この作業ツリーで npm ci / npm install / pip install -r / bundle install を実行しない（ロックファイルが侵害版・脆弱版を再び取得する）。対象: /srv/zes-fixtures/chaindrop/package-lock.json"
+            },
+            {
+              "blocking": true,
+              "id": "s2",
+              "text": "~/.npmrc に ignore-scripts=true、環境変数に PIP_REQUIRE_VIRTUALENV=true と PYTHONNOUSERSITE=1 を設定する"
+            },
+            {
+              "blocking": true,
+              "id": "s3",
+              "text": "依存の指定を安全版・修正版に変え、秘密情報の無い隔離環境でロックファイルを再生成する（npm install --ignore-scripts / poetry lock / uv lock / bundle lock --update / cargo update -p など）"
+            },
+            {
+              "blocking": true,
+              "id": "s4",
+              "text": "npm ls <name> / pip show / bundle info / cargo tree で侵害版・脆弱版が残っていないことを確かめる"
+            },
+            {
+              "blocking": true,
+              "id": "s5",
+              "text": "侵害版がインストール・実行された可能性があれば CL-SECRET を実施する"
+            },
+            {
+              "blocking": true,
+              "id": "s6",
+              "text": "ZES で再スキャンし、この finding が消えたことを確かめる"
+            }
+          ],
+          "template": "CL-PKG"
+        },
+        "relation": "self",
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/chaindrop/package-lock.json",
+        "type": "checklist"
+      },
+      "approved_by": [
+        "sec-a"
+      ],
+      "decided_at": "2026-10-23T10:06:43Z",
+      "decided_by": "alice",
+      "decision": "remediate",
+      "due_at": "2026-10-30T10:06:43Z",
+      "exception_type": null,
+      "finding_id": "sha256:23bc71cf36f5f358fb2c556e435036cd90a4ca0bb0f839e9ead0f8be3516f317",
+      "level_effective": "CRITICAL",
+      "owner": "team-sec",
+      "reason": null,
+      "recheck_at": null
+    },
+    {
+      "action": {
+        "evidence": {
+          "hash": "sha256:01276ce6141def02187ce126df28a07a35768cf2328dd94c890e56ee8ce90870",
+          "kind": "file"
+        },
+        "finding_path": "/srv/zes-fixtures/chaindrop/setup.mjs",
+        "followup": [
+          {
+            "steps": [
+              {
+                "blocking": true,
+                "id": "s1",
+                "text": "隔離・修復した時刻を記録し、この端末をネットワークから切り離すかどうかを判断する。対象: /srv/zes-fixtures/chaindrop/setup.mjs"
+              },
+              {
+                "blocking": true,
+                "id": "s2",
+                "text": "CL-SECRET を実施する"
+              },
+              {
+                "blocking": true,
+                "id": "s3",
+                "text": "同じ campaign の他の痕跡を zes-scan.sh --full で確かめる"
+              },
+              {
+                "blocking": true,
+                "id": "s4",
+                "text": "再構築するかどうかを判断する（ルートキットや永続化の痕跡があれば再構築を勧める）。GER の修復はインシデントの終わりを意味しない"
+              }
+            ],
+            "template": "CL-IR"
+          }
+        ],
+        "group": "g-468dfcf0404907a0",
+        "params": {
+          "kind": "file",
+          "sha256": "sha256:01276ce6141def02187ce126df28a07a35768cf2328dd94c890e56ee8ce90870"
+        },
+        "relation": "self",
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/chaindrop/setup.mjs",
+        "type": "quarantine"
+      },
+      "approved_by": [
+        "sec-a"
+      ],
+      "decided_at": "2026-10-23T10:06:43Z",
+      "decided_by": "alice",
+      "decision": "remediate",
+      "due_at": "2026-10-30T10:06:43Z",
+      "exception_type": null,
+      "finding_id": "sha256:3cba8397ba9116b3d9c0778bc68c4dcef84382c3ba0222ae54fa6c7a55bc0c29",
+      "level_effective": "CRITICAL",
+      "owner": "team-sec",
+      "reason": null,
+      "recheck_at": null
+    },
+    {
+      "action": {
+        "evidence": {
+          "hash": "sha256:b962362ebe7560b534e834c2ede51186c2e3fceb94e12cc434a11180f22391f2",
+          "kind": "file"
+        },
+        "finding_path": "/srv/zes-fixtures/_home/.npmrc",
+        "params": {
+          "steps": [
+            {
+              "blocking": true,
+              "id": "s1",
+              "text": "この端末・作業ツリーから読めた認証情報（§14 の一覧と finding の path）を、提供元ですべて失効させる（GitHub PAT: Settings → Developer settings → Revoke、npm: npm token revoke、AWS: IAM でアクセスキーを無効化・削除、SSH 鍵: authorized_keys と GitHub の SSH keys から削除）"
+            },
+            {
+              "blocking": true,
+              "id": "s2",
+              "text": "新しい認証情報を、侵害されていない端末で発行する"
+            },
+            {
+              "blocking": true,
+              "id": "s3",
+              "text": "提供元の監査ログで、失効までの不正使用がなかったかを確かめる"
+            },
+            {
+              "blocking": false,
+              "id": "s4",
+              "text": "git 履歴に入っていれば、履歴の書き換えか失効だけで済ませるかを決めて記録する（GER は履歴を書き換えない）"
+            }
+          ],
+          "template": "CL-SECRET"
+        },
+        "relation": "self",
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/_home/.npmrc",
+        "type": "checklist"
+      },
+      "approved_by": [
+        "sec-a"
+      ],
+      "decided_at": "2026-10-23T10:06:43Z",
+      "decided_by": "alice",
+      "decision": "remediate",
+      "due_at": "2026-12-22T10:06:43Z",
+      "exception_type": null,
+      "finding_id": "sha256:deaa6df69be6db8c3c82e17bf612127c1ae95af030696b07109a6900a00ff19c",
+      "level_effective": "MEDIUM",
+      "owner": "team-sec",
+      "reason": null,
+      "recheck_at": null
+    }
+  ],
+  "plan_hash": "sha256:5740a75ff1607246c92d681a583144d956a6d9f72350a4ef58018d50591e8b68",
+  "plan_id": "51649a0a-2754-46fa-a170-732b419dbb36",
+  "schema_version": "1.1",
+  "scope": {
+    "home": "/srv/zes-fixtures/_home",
+    "roots": [
+      "/srv/zes-fixtures/chaindrop"
+    ]
+  },
+  "status": "partial"
+}
