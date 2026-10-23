@@ -288,27 +288,48 @@ def _inspect(ctx, path: str, kind: str):
     return res, digest, tree
 
 
+def _relations(items) -> list[tuple[str, str | None]]:
+    """group の各 item の (relation, finding_path)。findings 1.1 では 1 つの対象に finding_path の違う finding が
+    まとまる（スキルのディレクトリと skill.contract.json、node_modules/<name>/package.json とロックファイル）。
+    1 件目だけでなく全件の関係を確かめる（G-9）。"""
+    out = []
+    for it in items:
+        a = it.action
+        rel, fp = a.get("relation", "self"), a.get("finding_path", a["target"])
+        why = lexical_relation(rel, a["target"], fp)
+        if why:
+            raise ActionError(f"G-9: {why}")
+        if (rel, fp) not in out:
+            out.append((rel, fp))
+    return out
+
+
+def _check_kind(target: str, rels, kind: str) -> None:
+    for rel, _fp in rels:
+        if rel == "self":
+            why = hazards.metadata_only(target, kind)
+            if why:
+                raise ActionError(f"Q-6: {why}")
+        elif kind != "tree":
+            raise ActionError(f"relation {rel} の対象はディレクトリ（kind: tree）です")
+
+
 def prepare(ctx, items):
     a = items[0].action
     params = base.same_group_params(items)
     validate_params(params)
-    target, relation, fp = a["target"], a.get("relation", "self"), a.get("finding_path", a["target"])
-    why = lexical_relation(relation, target, fp)
-    if why:
-        raise ActionError(f"G-9: {why}")
-    if relation == "self":
-        why = hazards.metadata_only(target, params["kind"])
-        if why:
-            raise ActionError(f"Q-6: {why}")
-    if relation != "self" and params["kind"] != "tree":
-        raise ActionError(f"relation {relation} の対象はディレクトリ（kind: tree）です")
+    target = a["target"]
+    rels = _relations(items)
+    relation = rels[0][0]
+    _check_kind(target, rels, params["kind"])
     try:
         fsutil.resolve(target).close()
     except FileNotFoundError:
         if _already(target, params):
             return QuarantineStep(items, target, [], relation, _pin_of(params), noop=True)
         raise
-    check_relation_fs(relation, target, fp, params)
+    for rel, fp in rels:
+        check_relation_fs(rel, target, fp, params)
     res, digest, tree = _inspect(ctx, target, params["kind"])
     if digest != _pin_of(params):
         raise ActionError("対象の内容が preview（承認）の時から変わっています（ハッシュ・リンク先が params と不一致）")
@@ -324,26 +345,27 @@ def prepare(ctx, items):
 
 def preview(ctx, items) -> PreviewResult:
     a = items[0].action
-    target, relation, fp = a["target"], a.get("relation", "self"), a.get("finding_path", a["target"])
-    why = lexical_relation(relation, target, fp)
-    if why:
-        raise ActionError(f"G-9: {why}")
+    target = a["target"]
+    rels = _relations(items)
+    relation = rels[0][0]
+    names = {r for r, _fp in rels}
     res = ctx.pool.add(fsutil.resolve(target))
     kind = fsutil.kind_of(res.st)
     if kind == "special":
         raise ActionError("FIFO・ソケット・デバイスは隔離できません")
-    if relation == "self":
+    if "self" in names:
         why = hazards.metadata_only(target, kind)
         if why:
             raise ActionError(f"Q-6: {why}")
     params: dict = {"kind": kind}
     extra = ""
-    if relation in ("npm_pkg_dir", "npm_installed"):
+    if names & {"npm_pkg_dir", "npm_installed"}:
         params["subject"] = _npm_subject(target)
         extra = f" {params['subject']['name']}@{params['subject']['version']}"
-    if relation == "pypi_record":
+    if "pypi_record" in names:
         params["record"] = True
-    check_relation_fs(relation, target, fp, params)
+    for rel, fp in rels:
+        check_relation_fs(rel, target, fp, params)
     _r, digest, tree = _inspect(ctx, target, kind)
     if kind == "file":
         params["sha256"] = digest

@@ -512,13 +512,22 @@ def _prepare_all(plan: dict, items: list[dict], approvers: set, pool: fsutil.FdP
                 a = it["action"]
                 if a["type"] != a0["type"] or a["target"] != t:
                     raise ActionError(f"group {a0.get('group')} の item の type / target が一致しません")
-                # 内容に基づく evidence（file / tree / symlink）は一致すること。detail（ZES 1.0 のディレクトリ・リンク）は
-                # finding ごとの文言のハッシュなので一致しない。その場合は params に固定した preview のハッシュに任せる
-                ev0, ev = a0.get("evidence", {}), a.get("evidence", {})
-                content = {"file", "large_file", "tree", "symlink"}
-                if (ev0.get("kind") in content and ev.get("kind") in content and ev.get("hash") != ev0.get("hash")
-                        and a0["type"] != checklist_mod.TYPE):
-                    raise ActionError(f"group {a0.get('group')} の item の evidence.hash が一致しません")
+            # 同じ finding_path の item どうしは、内容に基づく evidence（file / tree / symlink）が一致すること。
+            # finding_path が違う item（findings 1.1 のスキルのディレクトリの tree と skill.contract.json の file、
+            # node_modules/<name>/package.json とロックファイル）は別のものの evidence なので比べない。どの item の
+            # evidence も、下の check_evidence でそれぞれの finding_path から導き直して照合する（item ごと・全件）。
+            # detail（ZES 1.0 のディレクトリ・リンク）は finding ごとの文言のハッシュなので一致しない。その場合は
+            # params に固定した preview のハッシュに任せる
+            content = {"file", "large_file", "tree", "symlink"}
+            by_fp: dict = {}
+            for _i, it in grp:
+                a = it["action"]
+                ev = a.get("evidence", {})
+                if a0["type"] == checklist_mod.TYPE or ev.get("kind") not in content:
+                    continue
+                ev0 = by_fp.setdefault(a.get("finding_path"), ev)
+                if ev.get("hash") != ev0.get("hash"):
+                    raise ActionError(f"group {a0.get('group')} の item の evidence.hash が一致しません（同じ finding_path）")
             if t is not None:
                 if not _target_shape_ok(t):
                     raise ActionError("対象は正規化済みの絶対パスであること（. / .. / 連続した / 不可）")
