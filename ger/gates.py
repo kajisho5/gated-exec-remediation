@@ -26,6 +26,37 @@ class Prepared:
     before: int
 
 
+def with_ancestors(path) -> tuple[set[str], set[tuple[int, int]]]:
+    """path とその上位ディレクトリすべての (実パスの集合, 存在するものの (st_dev, st_ino) の集合)。"""
+    paths: set[str] = set()
+    idents: set[tuple[int, int]] = set()
+    p = os.path.realpath(path)
+    while True:
+        paths.add(p)
+        try:
+            st = os.stat(p)
+            idents.add((st.st_dev, st.st_ino))
+        except OSError:
+            pass
+        parent = os.path.dirname(p)
+        if parent == p:
+            return paths, idents
+        p = parent
+
+
+def _audit_protected() -> tuple[set[str], set[tuple[int, int]]]:
+    """変更すると GER 自身が監査ログを書けなくなるもの: 監査ログ、そのディレクトリとその上位すべて。"""
+    paths, idents = with_ancestors(audit.log_dir())
+    lp = audit.log_path()
+    paths.add(os.path.realpath(lp))
+    try:
+        st = os.stat(lp)
+        idents.add((st.st_dev, st.st_ino))
+    except OSError:  # まだ無い（初回）
+        pass
+    return paths, idents
+
+
 def _schema(name: str, inst, label: str, gate: str = "G-1") -> list[Rejection]:
     return [Rejection(gate, f"{label}{e}") for e in validator(name).errors(inst)]
 
@@ -116,6 +147,7 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
     prepared: list[Prepared] = []
     seen: set[str] = set()
     seen_ino: set[tuple[int, int]] = set()
+    prot_paths, prot_ino = _audit_protected()
     for it in items:
         a, fid = it["action"], it["finding_id"]
         t = a["target"]
@@ -132,6 +164,8 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
             seen_ino.add((st.st_dev, st.st_ino))
             if os.path.realpath(t) != t:
                 raise ActionError("パスの途中にシンボリックリンクがあります")
+            if t in prot_paths or (st.st_dev, st.st_ino) in prot_ino:
+                raise ActionError("監査ログ・そのディレクトリ・その上位ディレクトリは対象にできません（変更後に記録できなくなる）")
             prepared.append(Prepared(fid, a["type"], t, mode, (st.st_dev, st.st_ino, st.st_ctime_ns), st.st_mode & 0o7777))
         except FileNotFoundError:
             rej.append(Rejection("G-7", "対象が存在しません", fid))

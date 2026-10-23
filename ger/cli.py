@@ -5,7 +5,8 @@
   ger apply   <ger-input.json> --operator NAME -o remediation-log.json
 
 終了コード: 0=成功 / 3=ゲートで拒否（何も変更していない） / 4=失敗しロールバック済み /
-           5=ロールバックも失敗（要手動対応） / 64=引数・環境エラー / 70=内部エラー
+           5=ロールバックも失敗、または適用後に remediation-log を書けなかった（要手動対応） /
+           64=引数・環境エラー / 70=内部エラー
 環境変数: GER_LOG_DIR（監査ログ）、GER_DRYRUN_TTL（dry-run 記録の有効秒数、既定 86400）、
          GER_ALLOW_NOW_OVERRIDE（=1 のときだけ --now を受け付ける。テスト専用）
 """
@@ -19,7 +20,7 @@ import sys
 
 from . import audit, executor
 from .core import Rejection, canonical, fmt_ts, input_hash, load_json, now_utc, plan_hash, sha256, validator, write_atomic
-from .gates import check_gates
+from .gates import check_gates, with_ancestors
 
 EXIT_OK, EXIT_REJECTED, EXIT_ROLLED_BACK, EXIT_ROLLBACK_FAILED, EXIT_USAGE, EXIT_INTERNAL = 0, 3, 4, 5, 64, 70
 _PERSON = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$")
@@ -102,9 +103,13 @@ def _output_clash(path: str, prepared) -> str | None:
         ino = (st.st_dev, st.st_ino)
     except OSError:
         ino = None
+    # 出力先ディレクトリやその上位を変更すると apply 後に remediation-log を書けなくなる
+    dir_paths, dir_ino = with_ancestors(os.path.dirname(path) or ".")
     for p in prepared:
         if os.path.realpath(path) == p.target or ino == p.ident[:2]:
             return f"-o に計画の対象は指定できません（{p.target}）"
+        if p.target in dir_paths or p.ident[:2] in dir_ino:
+            return f"-o の出力先ディレクトリやその上位ディレクトリは計画の対象にできません（{p.target}）"
     return None
 
 
@@ -138,6 +143,8 @@ def main(argv: list[str] | None = None) -> int:
     rejections = []
     log_obj = None
     changed = unlogged = False  # apply が変更を残している可能性（成功、またはロールバック失敗）
+    outcome = None  # executor.apply の結果（None は全件適用、またはまだ apply していない）
+    result = None  # 終了コードから決まらない監査ログの result（変更は適用したが remediation-log を書けなかった）
     try:
         inp = load_json(args.input)
     except (OSError, ValueError) as e:
@@ -193,15 +200,18 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as e:
             print(f"ger: remediation-log を書き出せません（{e}）", file=sys.stderr)
             unlogged = changed
+            _remove_stale_output(args.output)
             if changed:
+                if outcome is None:  # 全件適用した（ロールバックはしていない）。rollback_failed とは記録しない
+                    result = "applied_unlogged"
                 code = EXIT_ROLLBACK_FAILED
                 print(f"ger {args.command}: 変更を適用した可能性がありますが remediation-log を残せませんでした。"
                       "監査ログと対象の権限を確認して手動で対応してください", file=sys.stderr)
             elif code == EXIT_OK:
                 code = EXIT_USAGE
-    record.update({"finished_at": fmt_ts(clock()),
-                   "result": {EXIT_OK: "ok", EXIT_REJECTED: "rejected", EXIT_ROLLED_BACK: "rolled_back",
-                              EXIT_ROLLBACK_FAILED: "rollback_failed"}.get(code, "error")})
+    result = result or {EXIT_OK: "ok", EXIT_REJECTED: "rejected", EXIT_ROLLED_BACK: "rolled_back",
+                        EXIT_ROLLBACK_FAILED: "rollback_failed"}.get(code, "error")
+    record.update({"finished_at": fmt_ts(clock()), "result": result})
     try:
         audit.append(record)
     except OSError as e:
@@ -215,6 +225,20 @@ def main(argv: list[str] | None = None) -> int:
     if msg:
         print(f"ger {args.command}: {msg}", file=sys.stderr)
     return code
+
+
+def _remove_stale_output(path: str) -> None:
+    """書き出しに失敗したとき、以前の実行の remediation-log が今回のものと取り違えられないよう消す。
+
+    出力先は _check_output で通常ファイル（または未作成）と確認済みで、成功していれば置き換えていたもの。
+    """
+    try:
+        os.unlink(path)
+        print(f"ger: 以前の remediation-log を削除しました: {path}", file=sys.stderr)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        print(f"ger: 以前の remediation-log を削除できません。今回の実行の記録ではありません: {path}（{e}）", file=sys.stderr)
 
 
 def _log(inp: dict, mode: str, started_at: str, finished, results: list[dict], status: str) -> dict:

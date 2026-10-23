@@ -59,13 +59,13 @@ Input ([schemas/ger-input.schema.json](schemas/ger-input.schema.json)):
 | 0 | Success |
 | 3 | Rejected by a gate (nothing changed) |
 | 4 | Failed during execution; everything rolled back |
-| 5 | Rollback could not be completed either (manual action required) |
+| 5 | Rollback could not be completed either, or changes were applied but the remediation-log could not be written (manual action required) |
 | 64 / 70 | Usage or environment error / internal error |
 
 Environment variables: `GER_LOG_DIR` (audit log, default `$XDG_STATE_HOME/ger/`, or `~/.local/state/ger/` when `XDG_STATE_HOME` is unset), `GER_DRYRUN_TTL` (validity of a dry-run record in seconds, default 86400, maximum 604800).
 `--now` (overrides the current time) is test-only and is accepted only when `GER_ALLOW_NOW_OVERRIDE=1` is set (otherwise exit code 64). A run with `--now` is recorded in the audit log with `now_override: true`, and such a dry-run record does not count towards G-8 for an apply run without `--now`.
 
-The `-o` destination is checked before any change begins: it must not be empty or end with `/`, its parent directory (taken from the path as given) must exist and be writable, if it already exists it must be a regular file (a directory, FIFO, socket, device such as `/dev/null`, or symbolic link is refused; a symbolic link is refused rather than followed because the log is written by atomic rename, which would replace the link itself), and it must not be the same file as the audit log, a file inside the audit log directory, an input file, or any target of the plan. Because the comparison uses the real path and, for existing files, `st_dev`/`st_ino`, it is rejected even via symbolic links in the parent path or via hard links. A violation yields exit code 64; a collision with a plan target is only discovered after the input has been read, so it is recorded in the audit log as `result: "error"` with the reason. The remediation-log is written before the audit log, and if it cannot be written the run is not recorded as a success (exit code 5 when apply may have left changes in place).
+The `-o` destination is checked before any change begins: it must not be empty or end with `/`, its parent directory (taken from the path as given) must exist and be writable, if it already exists it must be a regular file (a directory, FIFO, socket, device such as `/dev/null`, or symbolic link is refused; a symbolic link is refused rather than followed because the log is written by atomic rename, which would replace the link itself), and it must not be the same file as the audit log, a file inside the audit log directory, an input file, or any target of the plan, and no target of the plan may be its parent directory or any ancestor of it (otherwise the remediation-log could not be written after apply). Because the comparison uses the real path and, for existing files, `st_dev`/`st_ino`, it is rejected even via symbolic links in the parent path or via hard links. A violation yields exit code 64; a collision with the plan's targets is only discovered after the input has been read, so it is recorded in the audit log as `result: "error"` with the reason. The remediation-log is written before the audit log, and if it cannot be written the run is not recorded as a success and any earlier file at the `-o` path is removed so that it is not mistaken for this run's log (exit code 5 when apply may have left changes in place; the audit log records `result: "applied_unlogged"` when every change was applied and no rollback was attempted, and `rollback_failed` only when a rollback failed).
 
 ## Gates
 
@@ -77,7 +77,7 @@ The `-o` destination is checked before any change begins: it must not be empty o
 | G-4 | `--operator` is among the approvers (names are compared case-insensitively) |
 | G-5 | The action is not in allowed_actions, or GER does not support it |
 | G-6 | reversible / skillpact_effects ([SkillPact](https://github.com/kajisho5/skillpact) effects) is missing (not finalized by ZET), reversible does not match the nature of the action, or an irreversible action has fewer than 2 approvers (names differing only in case count as the same person) |
-| G-7 | The target is not a normalized absolute path, does not exist, is a symbolic link (including any intermediate path component), is not a regular file/directory, is not owned by the user, or is duplicated within the plan (including hard links to the same underlying file); or the chmod mode does not match `^0[0-7]{3}$` |
+| G-7 | The target is not a normalized absolute path, does not exist, is a symbolic link (including any intermediate path component), is not a regular file/directory, is not owned by the user, is the audit log, the audit log directory or any of its ancestors (changing them would stop GER from recording the run), or is duplicated within the plan (including hard links to the same underlying file); or the chmod mode does not match `^0[0-7]{3}$` |
 | G-8 | On apply, there is no unexpired successful dry-run record with the same plan_hash and the same input (apart from mode), or the audit log's hash chain is broken (a line that is not a UTF-8 JSON object, such as a torn last line, also counts as broken) |
 
 During execution, a change is made only if the object's identity matches the one captured during pre-validation (`st_dev`, `st_ino`, `st_ctime_ns`). Because inode numbers can be reused after deletion and re-creation, ctime is included to determine that it is the same object.
@@ -97,12 +97,12 @@ During execution, a change is made only if the object's identity matches the one
 ## Tests
 
 ```bash
-tests/run-tests.sh   # 単体テスト（43 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
+tests/run-tests.sh   # 単体テスト（49 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
 ```
 
-This runs the unit tests (46; chmod, rollback and swap detection are verified on real files in a temporary directory) plus strace-based verification that no external process is launched.
+This runs the unit tests (49; chmod, rollback and swap detection are verified on real files in a temporary directory) plus strace-based verification that no external process is launched.
 
-When run as root, the "unreadable file (0000)" test is SKIPped (as a regular user all 46 tests run). Schema and plan_hash compatibility are also checked against an actual plan finalized by ZET (`tests/fixtures/zet-final-plan.json`).
+When run as root, the "unreadable file (0000)" test is SKIPped (as a regular user all 49 tests run). Schema and plan_hash compatibility are also checked against an actual plan finalized by ZET (`tests/fixtures/zet-final-plan.json`).
 
 ## License
 

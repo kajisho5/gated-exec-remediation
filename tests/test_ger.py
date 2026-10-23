@@ -220,6 +220,16 @@ class TestGates(Base):
         fifo = self.d / "fifo"; os.mkfifo(fifo)
         self.assertRejected(self.ger_input(plan=self.plan([fifo])), "G-7")
 
+    def test_g7_audit_log_and_its_directories_rejected(self):
+        # 監査ログ・そのディレクトリ・その上位ディレクトリを chmod すると、apply 後に記録できなくなる
+        self.assertEqual(self.ger("dry-run", self.ger_input())[0], 0)
+        hl = self.d / "audit-hardlink"; os.link(audit.log_path(), hl)
+        for t in (audit.log_path(), hl, audit.log_dir(), self.d):
+            code, err = self.ger("verify", self.ger_input(plan=self.plan([t])))
+            self.assertEqual(code, 3, (t, err))
+            self.assertIn("G-7", err); self.assertIn("監査ログ", err)
+        self.assertEqual(stat.S_IMODE(os.stat(audit.log_dir()).st_mode), 0o700)
+
     def test_g1_duplicate_finding_id(self):
         p = self.plan(); p["items"][1]["finding_id"] = FID[0]; p["plan_hash"] = plan_hash(p)
         code, err = self.ger("verify", self.ger_input(plan=p))
@@ -540,6 +550,36 @@ class TestExecution(Base):
         self.assertTrue(all("計画の対象" in r["error"] for r in recs[1:]))
         self.assertEqual(audit.verify_chain(), [])
 
+    def test_output_parent_directories_must_not_be_plan_targets(self):
+        # -o の親ディレクトリやその上位を chmod すると、apply 後に remediation-log を書けなくなる
+        out = self.d / "out"; sub = out / "sub"; sub.mkdir(parents=True)
+        os.chmod(out, 0o755); os.chmod(sub, 0o755)
+        for t in (sub, out):
+            inp = self.ger_input(plan=self.plan([t]))
+            self.assertEqual(self.ger("dry-run", inp)[0], 0)
+            ap = copy.deepcopy(inp); ap["mode"] = "apply"
+            code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", str(sub / "x.json"))
+            self.assertEqual(code, 64, (t, err))
+            self.assertIn("-o の出力先ディレクトリ", err)
+            self.assertEqual(stat.S_IMODE(os.stat(t).st_mode), 0o755, "対象が変更されています")
+        self.assertFalse((sub / "x.json").exists())
+
+    def test_output_write_failure_after_apply_is_not_rollback_failed(self):
+        # 変更をすべて適用した後に remediation-log を書けなかった場合、ロールバックはしていないので
+        # rollback_failed と記録しない。以前の実行の remediation-log を今回のものと取り違えないよう消す
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        stale = self.d / "apply-log.json"; stale.write_text('{"stale": true}')
+        with mock.patch.object(cli, "write_atomic", side_effect=OSError("disk full")):
+            code, err = self.ger("apply", ap)
+        self.assertEqual(code, 5, err)
+        self.assertTrue(all(mode_of(t) == 0o600 for t in self.targets))
+        rec = json.loads(audit.log_path().read_text().splitlines()[-1])
+        self.assertEqual(rec["result"], "applied_unlogged")
+        self.assertNotIn("output_hash", rec)
+        self.assertFalse(stale.exists(), "以前の remediation-log が残っています")
+
     def test_output_write_failure(self):
         inp = self.ger_input()
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
@@ -554,7 +594,7 @@ class TestExecution(Base):
         self.assertEqual(code, 5, err)
         self.assertIn("手動で対応", err)
         recs = [json.loads(line) for line in audit.log_path().read_text().splitlines()]
-        self.assertEqual([r["result"] for r in recs], ["error", "rejected", "ok", "rollback_failed"])
+        self.assertEqual([r["result"] for r in recs], ["error", "rejected", "ok", "applied_unlogged"])
         self.assertNotIn("output_hash", recs[0]); self.assertNotIn("output_hash", recs[-1])
 
     def test_now_override_requires_env(self):
