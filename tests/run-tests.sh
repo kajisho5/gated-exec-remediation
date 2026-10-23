@@ -15,20 +15,22 @@ else
   export GER_LOG_DIR="$TMP/log"
   printf 'x' >"$TMP/key"; chmod 644 "$TMP/key"
   python3 -I - "$ROOT" "$TMP" <<'PY'
-import json, sys
+import datetime as dt, json, sys
 sys.path.insert(0, sys.argv[1])
-from ger.core import plan_hash
+from ger.core import fmt_ts, now_utc, plan_hash
 t = sys.argv[2]
-plan = {"schema_version": "1.0", "plan_id": "11111111-2222-4333-8444-555555555555", "created_at": "2026-01-01T00:00:00Z",
+# 承認の有効期限（G-3）と due_at（G-2）があるため、時刻は実行時点からの相対値にする
+ts = lambda h: fmt_ts(now_utc() + dt.timedelta(hours=h))
+plan = {"schema_version": "1.0", "plan_id": "11111111-2222-4333-8444-555555555555", "created_at": ts(-2),
         "status": "ok", "held": [], "items": [{
             "finding_id": "sha256:" + "a" * 64, "decision": "remediate", "exception_type": None, "reason": None,
-            "owner": "team-a", "decided_by": "alice", "decided_at": "2026-10-22T10:00:00Z", "due_at": "2026-10-29T10:00:00Z",
+            "owner": "team-a", "decided_by": "alice", "decided_at": ts(-2), "due_at": ts(24 * 7),
             "recheck_at": None, "approved_by": [], "level_effective": "HIGH",
             "action": {"type": "chmod", "target": f"{t}/key", "params": {"mode": "0600"}, "reversible": True, "skillpact_effects": []}}]}
 plan["plan_hash"] = plan_hash(plan)
 for mode in ("dry-run", "apply"):
     json.dump({"schema_version": "1.0", "plan": plan, "mode": mode, "allowed_actions": ["chmod"],
-               "approval": {"plan_id": plan["plan_id"], "approved_by": ["security-lead"], "approved_at": "2026-01-01T01:00:00Z",
+               "approval": {"plan_id": plan["plan_id"], "approved_by": ["security-lead"], "approved_at": ts(-1),
                             "approval_token": plan["plan_hash"]}}, open(f"{t}/{mode}.json", "w"))
 PY
   for c in dry-run apply; do

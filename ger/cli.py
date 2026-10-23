@@ -9,7 +9,8 @@
            5=ロールバックも失敗、または適用後に remediation-log を書けなかった（要手動対応） /
            64=引数・環境エラー / 70=内部エラー（verify-log: 0=健全 / 3=破損 / 64=ログが無い）
 環境変数: GER_LOG_DIR（監査ログ。起動時に実パスへ解決する）、GER_DRYRUN_TTL（dry-run 記録の有効秒数、既定 86400）、
-         GER_ALLOW_NOW_OVERRIDE（=1 のときだけ --now を受け付ける。テスト専用）
+         GER_APPROVAL_MAX_AGE（承認の有効秒数、既定 604800）、
+         GER_ALLOW_NOW_OVERRIDE（=1 のときだけ --now と now_override: true の計画を受け付ける。テスト専用）
 """
 from __future__ import annotations
 
@@ -61,6 +62,13 @@ def _ttl() -> int:
     raw = os.environ.get("GER_DRYRUN_TTL", "86400")
     if not raw.isdigit() or not 0 < int(raw) <= 7 * 86400:
         raise ValueError("GER_DRYRUN_TTL は 1〜604800 の整数（秒）で指定してください")
+    return int(raw)
+
+
+def _approval_max_age() -> int:
+    raw = os.environ.get("GER_APPROVAL_MAX_AGE", str(7 * 86400))
+    if not raw.isascii() or not raw.isdigit() or not 0 < int(raw) <= 366 * 86400:
+        raise ValueError("GER_APPROVAL_MAX_AGE は 1〜31622400 の整数（秒）で指定してください")
     return int(raw)
 
 
@@ -157,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         now = now_utc(args.now)
         ttl = _ttl()
+        max_age = _approval_max_age()
         if getattr(args, "output", None) is not None:
             _check_output(args.output, args.input)
     except ValueError as e:
@@ -195,7 +204,9 @@ def main(argv: list[str] | None = None) -> int:
             except (TypeError, ValueError):
                 pass
         try:
-            rejections, prepared = check_gates(inp, args.operator, now, args.command, ttl, now_override=bool(args.now))
+            rejections, prepared = check_gates(inp, args.operator, now, args.command, ttl, now_override=bool(args.now),
+                                               approval_max_age=max_age,
+                                               allow_now_override_plan=os.environ.get("GER_ALLOW_NOW_OVERRIDE") == "1")
             clash = None if rejections or args.command == "verify" else _output_clash(args.output, prepared)
             if rejections:
                 code = EXIT_REJECTED

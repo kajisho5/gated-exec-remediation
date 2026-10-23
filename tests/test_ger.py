@@ -210,19 +210,22 @@ class TestGates(Base):
     def test_g6_risky_effects_need_explicit_action(self):
         # SkillPact 0.8: exec / network / spend / send を宣言したスキルへの操作は allowed_actions に明示が必要
         for eff, risky in (("exec", True), ("network", True), ("spend", True), ("send", True), ("read", False), ("write", False)):
-            p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = [eff]; p["plan_hash"] = plan_hash(p)
-            code, err = self.ger("verify", self.ger_input(plan=p, allowed=()))
+            p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = [eff]
+            p["items"][0]["approved_by"] = ["security-lead", "platform-owner"]  # ZET I-6: 危険な効果の remediate は 2 名
+            p["plan_hash"] = plan_hash(p)
+            code, err = self.ger("verify", self.ger_input(plan=p, allowed=(), approvers=("security-lead", "platform-owner")))
             self.assertEqual(code, 3, err)
             self.assertEqual(f"{eff} を宣言したスキルへの操作" in err, risky, eff)
         p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = ["read", "write", "network", "exec", "spend", "send"]
+        p["items"][0]["approved_by"] = ["security-lead", "platform-owner"]
         p["plan_hash"] = plan_hash(p)
-        self.assertEqual(self.ger("verify", self.ger_input(plan=p))[0], 0)
+        self.assertEqual(self.ger("verify", self.ger_input(plan=p, approvers=("a", "b")))[0], 0)
 
     def test_g7_targets(self):
         link = self.d / "link"; link.symlink_to(self.targets[0])
         self.assertRejected(self.ger_input(plan=self.plan([link])), "G-7")
         self.assertRejected(self.ger_input(plan=self.plan([self.d / "missing"])), "G-7")
-        self.assertRejected(self.ger_input(plan=self.plan([Path(str(self.d) + "/sub/../key0")])), "G-7")
+        self.assertRejected(self.ger_input(plan=self.plan([Path(str(self.d) + "/sub/../key0")])), "I-4")  # G-1（ZET I-4 相当）
         self.assertRejected(self.ger_input(plan=self.plan([self.targets[0], self.targets[0]])), "G-7")
         sub = self.d / "realdir"; sub.mkdir(); (sub / "f").write_text("x")
         (self.d / "dirlink").symlink_to(sub)
@@ -409,12 +412,13 @@ class TestExecution(Base):
         self.assertEqual({r["reason"] for r in self.log("apply")["results"] if r["action_type"]}, {"already_compliant"})
 
     def test_unreadable_target(self):
-        os.chmod(self.targets[0], 0o000)
+        os.chmod(self.targets[0], 0o300)  # 所有者が読めない（権限を絞る chmod 0200 だけが通る）
         if os.access(self.targets[0], os.R_OK):
             self.skipTest("root では読み取り不可のファイルを作れない")
-        code, err = self.dry_then_apply(self.ger_input())
+        p = self.plan(); p["items"][0]["action"]["params"]["mode"] = "0200"; p["plan_hash"] = plan_hash(p)
+        code, err = self.dry_then_apply(self.ger_input(plan=p))
         self.assertEqual(code, 0, err)
-        self.assertEqual(mode_of(self.targets[0]), 0o600)
+        self.assertEqual(mode_of(self.targets[0]), 0o200)
 
     def test_failure_rolls_back_everything(self):
         real = chmod.set_mode
@@ -690,6 +694,51 @@ class TestRegressionsR3Fixes(Base):
         p["plan_hash"] = plan_hash(p)
         return p
 
+    # F1: plan を書き換えて plan_hash と approval_token を計算し直しても、plan だけで評価できる ZET の不変条件で止める
+    def test_f1_tampered_and_rehashed_plan_rechecked(self):
+        sp = {"signed": True, "divergence": ["network"], "diff_anomaly": False, "declared_effects": ["exec"]}
+        cases = []
+        p = self.plan(); p["items"][3].update(skillpact=dict(sp), level_effective="CRITICAL"); cases.append((p, "I-5", "exception にできません"))
+        p = self.plan(); p["items"][0]["skillpact"] = dict(sp, divergence=[]); p["items"][0]["approved_by"] = ["a", "b"]
+        p["items"][0]["action"]["skillpact_effects"] = []; cases.append((p, "I-4", "declared_effects と一致しません"))
+        p = self.plan(); p["items"][0].update(skillpact=dict(sp, divergence=[], declared_effects=[], diff_anomaly=True))
+        cases.append((p, "I-6", "diff_anomaly"))
+        p = self.plan(); p["items"][0].update(skillpact=dict(sp, declared_effects=[]), level_effective="HIGH")
+        cases.append((p, "I-7", "CRITICAL"))
+        p = self.plan(); p["items"][3]["approved_by"] = ["alice"]; cases.append((p, "I-3", "自己承認"))
+        p = self.plan(); p["items"][3]["approved_by"] = []; cases.append((p, "I-3", "1 名以上"))
+        p = self.plan(); p["items"][3]["reason"] = " "; cases.append((p, "I-3", "reason"))
+        p = self.plan(); p["items"][1]["decision"] = "defer"; cases.append((p, "I-4", "remediate 以外で action"))
+        p = self.plan(); p["items"][0]["owner"] = None; cases.append((p, "I-4", "owner"))
+        p = self.plan(); p["items"][0]["action"]["target"] = "/" + str(self.targets[0]); cases.append((p, "I-4", "正規化"))
+        p = self.plan(); p["held"] = [{"finding_id": FID[0], "reason": "x"}]; cases.append((p, "I-1", "重複"))
+        p = self.plan(status="partial"); cases.append((p, "I-12", "held"))
+        p = self.plan(); p["items"][0]["decided_at"] = "2026-10-22T12:00:01Z"; cases.append((p, "I-9", "現在時刻より後"))
+        p = self.plan(); p["items"][0]["due_at"] = "2026-10-22T09:00:00Z"; cases.append((p, "I-9", "decided_at より前"))
+        p = self.plan(); p["items"][0]["decided_at"] = "2026-10-22T09:00:00Z"; cases.append((p, "I-9", "created_at より前"))
+        p = self.plan(); p["items"][0]["approved_by"] = ["Lead", "lead"]; cases.append((p, "I-6", "重複"))
+        p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = ["exec"]; cases.append((p, "I-6", "exec"))
+        for p, code, text in cases:
+            err = self.reject_msg(self.ger_input(plan=self.rehash(p), approvers=("lead1", "lead2")), "G-1", text)
+            self.assertIn(f"ZET {code} 相当", err)
+        # skillpact の要約が整合していれば通る（ZET が finalize で付けた形）
+        p = self.plan(); p["items"][0].update(skillpact=dict(sp, declared_effects=[]), level_effective="CRITICAL")
+        self.assertEqual(self.ger("verify", self.ger_input(plan=self.rehash(p)))[0], 0)
+
+    # F7: chmod は権限を絞るだけ（現在の mode に無いビットを足さない）。world-writable も拒否
+    def test_f7_chmod_only_tightens(self):
+        for before, mode, ok in ((0o644, "0600", True), (0o644, "0644", True), (0o644, "0000", True), (0o600, "0640", False),
+                                 (0o640, "0604", False), (0o600, "0700", False), (0o666, "0666", False), (0o777, "0757", False)):
+            os.chmod(self.targets[0], before)
+            p = self.plan(); p["items"][0]["action"]["params"]["mode"] = mode
+            code, err = self.ger("verify", self.ger_input(plan=self.rehash(p)))
+            self.assertEqual(code == 0, ok, (oct(before), mode, err))
+            if not ok:
+                self.assertIn("G-7", err)
+                self.assertTrue("権限" in err or "world-writable" in err, err)
+            self.assertEqual(mode_of(self.targets[0]), before)
+        os.chmod(self.targets[0], 0o644)
+
     # F2: GER_LOG_DIR をシンボリックリンク経由で指定しても、リンクを置いたディレクトリ（字句上の上位）を対象にできない
     def test_f2_log_dir_symlink_ancestors_protected(self):
         a, b = self.d / "A", self.d / "B" / "ger"
@@ -734,6 +783,46 @@ class TestRegressionsR3Fixes(Base):
         self.assertEqual(code, 64, err)
         self.assertEqual(self.ger("apply", ap)[0], 0)
 
+    # F5: 承認の有効期限（既定 7 日、GER_APPROVAL_MAX_AGE）と、remediate の due_at の最大値を過ぎた計画
+    def test_f5_approval_max_age_and_plan_due(self):
+        inp = self.ger_input()
+        p = self.plan(); [it.update(due_at="2026-12-31T00:00:00Z") for it in p["items"] if it["decision"] == "remediate"]
+        inp2 = self.ger_input(plan=self.rehash(p))
+        self.assertEqual(self.ger("verify", inp2, now="2026-10-29T11:00:00Z")[0], 0)  # ちょうど 7 日
+        self.reject_msg(inp2, "G-3", "GER_APPROVAL_MAX_AGE", now="2026-10-29T11:00:01Z")
+        os.environ["GER_APPROVAL_MAX_AGE"] = str(30 * 86400)
+        try:
+            self.assertEqual(self.ger("verify", inp2, now="2026-11-20T00:00:00Z")[0], 0)
+            for bad in ("0", "-1", "1e3", "x", "٣"):
+                os.environ["GER_APPROVAL_MAX_AGE"] = bad
+                self.assertEqual(self.ger("verify", inp2)[0], 64, bad)
+        finally:
+            os.environ.pop("GER_APPROVAL_MAX_AGE", None)
+        # due_at の最大値（2026-10-29T10:00:00Z）を過ぎたら、承認が新しくても実行しない
+        self.reject_msg(inp, "G-2", "期限切れ", now="2026-10-29T10:00:01Z")
+
+    # F5: ZET が --now で作った計画（now_override: true）は GER_ALLOW_NOW_OVERRIDE=1 のときだけ
+    def test_f5_now_override_plan_refused_by_default(self):
+        now = now_utc()
+        ts = lambda d: fmt_ts(now + dt.timedelta(seconds=d))  # noqa: E731
+        p = self.plan(created_at=ts(-3600))
+        for it in p["items"]:
+            it["decided_at"] = ts(-3600)
+            if it["due_at"]:
+                it["due_at"] = ts(86400)
+            if it["recheck_at"]:
+                it["recheck_at"] = ts(86400)
+        p["now_override"] = True
+        inp = self.ger_input(plan=self.rehash(p)); inp["approval"]["approved_at"] = ts(-60)
+        self.assertEqual(self.ger("verify", inp, now=None)[0], 0)  # テスト環境では GER_ALLOW_NOW_OVERRIDE=1
+        os.environ.pop("GER_ALLOW_NOW_OVERRIDE")
+        try:
+            self.reject_msg(inp, "G-2", "now_override", now=None)
+        finally:
+            os.environ["GER_ALLOW_NOW_OVERRIDE"] = "1"
+        # ZET の旧版の確定 plan（now_override なし）はそのまま受理する（後方互換）
+        self.assertEqual(self.ger("verify", self.ger_input(), now=NOW)[0], 0)
+
     # F6: --now 付きの apply は --now 付きの dry-run 記録だけを数える（実時刻の古い記録を --now で期限内に見せない）
     def test_f6_now_override_apply_counts_only_override_dry_runs(self):
         now = now_utc()
@@ -767,6 +856,35 @@ class TestRegressionsR3Fixes(Base):
         self.assertEqual(code, 64, err)
         self.assertNotIn("\x1b", err)
         self.assertIn("evil\\x1b[2Jdir", err)
+
+    # F10: exec / network / spend / send を宣言したスキルへの操作は allowed_actions の明示と承認者 2 名以上。効果名は 6 種のみ
+    def test_f10_risky_effects_need_two_approvers_and_enum(self):
+        p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = ["network"]
+        p["items"][0]["approved_by"] = ["security-lead", "platform-owner"]
+        self.reject_msg(self.ger_input(plan=self.rehash(p)), "G-6", "承認者 2 名以上")
+        self.assertEqual(self.ger("verify", self.ger_input(plan=p, approvers=("lead1", "LEAD2")))[0], 0)
+        self.reject_msg(self.ger_input(plan=p, approvers=("lead1", "LEAD1")), "G-6", "承認者 2 名以上")  # 大文字小文字だけの違いは 1 名
+        for eff in ("EXEC", " exec ", "exec​", "bogus-effect", "secrets"):
+            p = self.plan(); p["items"][0]["action"]["skillpact_effects"] = [eff]
+            self.reject_msg(self.ger_input(plan=self.rehash(p)), "G-1", "action")
+
+    # F14: evidence_hash があれば G-7 で現在のファイルと比べる（ZES の規則: 100MB 以下は内容、超えたらパス|サイズ|mtime）
+    def test_f14_evidence_hash_checked(self):
+        def with_ev(ev, targets=None):
+            p = self.plan(targets)
+            p["items"][0]["action"]["evidence_hash"] = ev
+            return self.ger_input(plan=self.rehash(p))
+        good = "sha256:" + hashlib.sha256(b"x").hexdigest()
+        self.assertEqual(self.ger("verify", with_ev(good))[0], 0)
+        self.targets[0].write_text("changed")
+        self.reject_msg(with_ev(good), "G-7", "evidence_hash")
+        st = os.stat(self.targets[0])
+        big = "sha256:" + hashlib.sha256(f"{self.targets[0]}|{st.st_size}|{int(st.st_mtime)}".encode()).hexdigest()
+        with mock.patch.object(gates, "EVIDENCE_FULL_HASH_MAX", 3):
+            self.assertEqual(self.ger("verify", with_ev(big))[0], 0)
+            self.reject_msg(with_ev(good), "G-7", "evidence_hash")
+        sub = self.d / "dir"; sub.mkdir(); os.chmod(sub, 0o755)  # ディレクトリは ZES が detail のハッシュを使うため比べない
+        self.assertEqual(self.ger("verify", with_ev("sha256:" + "0" * 64, [sub]))[0], 0)
 
     # F15: ger verify-log
     def test_f15_verify_log(self):
