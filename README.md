@@ -76,7 +76,7 @@ The `-o` destination is checked before any change begins: its parent directory m
 | G-3 | plan_hash does not match the body, approval.plan_id does not match, approval_token ≠ plan_hash, or approved_at is in the future or before the plan was created |
 | G-4 | `--operator` is among the approvers (names are compared case-insensitively) |
 | G-5 | The action is not in allowed_actions, or GER does not support it |
-| G-6 | reversible / skillpact_effects is missing (not finalized by ZET), reversible does not match the nature of the action, or an irreversible action has fewer than 2 approvers (names differing only in case count as the same person) |
+| G-6 | reversible / skillpact_effects ([SkillPact](https://github.com/kajisho5/skillpact) effects) is missing (not finalized by ZET), reversible does not match the nature of the action, or an irreversible action has fewer than 2 approvers (names differing only in case count as the same person) |
 | G-7 | The target is not a normalized absolute path, does not exist, is a symbolic link (including any intermediate path component), is not a regular file/directory, is not owned by the user, or is duplicated within the plan (including hard links to the same underlying file); or the chmod mode does not match `^0[0-7]{3}$` |
 | G-8 | On apply, there is no unexpired successful dry-run record with the same plan_hash and the same input (apart from mode), or the audit log's hash chain is broken |
 

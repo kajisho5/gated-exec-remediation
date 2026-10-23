@@ -70,7 +70,7 @@ bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode �
 | G-3 | plan_hash が本体と不一致、approval.plan_id 不一致、approval_token ≠ plan_hash、approved_at が未来または計画作成前 |
 | G-4 | `--operator` が承認者に含まれる（人名は大文字小文字を区別せずに比較） |
 | G-5 | 操作が allowed_actions に無い、または GER 未対応 |
-| G-6 | reversible / skillpact_effects が無い（ZET 確定済みでない）、reversible が操作の性質と不一致、不可逆操作で承認者 2 名未満（大文字小文字だけが異なる名前は同一人物として数える） |
+| G-6 | reversible / skillpact_effects（[SkillPact](https://github.com/kajisho5/skillpact) の effects）が無い（ZET 確定済みでない）、reversible が操作の性質と不一致、不可逆操作で承認者 2 名未満（大文字小文字だけが異なる名前は同一人物として数える） |
 | G-7 | 対象が正規化済みの絶対パスでない・存在しない・シンボリックリンク（途中経路を含む）・通常ファイル/ディレクトリ以外・所有者でない・計画内で重複（ハードリンクで同じ実体を指す場合を含む）、chmod の mode が `^0[0-7]{3}$` 以外 |
 | G-8 | apply 時に、同一 plan_hash・同一入力（mode 以外）の dry-run 成功記録が有効期限内に無い、または監査ログのハッシュチェーンが壊れている |
 
