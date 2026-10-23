@@ -110,7 +110,7 @@ tests/run-tests.sh   # 単体テスト（一時ディレクトリの実ファイ
 
 This runs the unit tests (chmod, rollback and swap detection are verified on real files in a temporary directory) plus strace-based verification that no external process is launched.
 
-When run as root, the "unreadable file" test is SKIPped (as a regular user it runs too). Schema and plan_hash compatibility are also checked against an actual plan finalized by ZET (`tests/fixtures/zet-final-plan.json`).
+When run as root, the "unreadable file" test is SKIPped (as a regular user it runs too). Schema and plan_hash compatibility are also checked against actual plans finalized by ZET: `tests/fixtures/zet-final-plan.json` (from a ZET release before round 3, without the new optional fields) and `tests/fixtures/zet-final-plan-r3.json` (with `items[].skillpact` and `action.evidence_hash`, which must also pass the ZET invariants GER re-checks in G-1).
 
 ## License
 

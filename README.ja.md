@@ -104,7 +104,7 @@ bin/ger verify-log
 tests/run-tests.sh   # 単体テスト（一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
 ```
 
-root で実行すると「読めないファイル」のテストは SKIP になります（一般ユーザーでは実行されます）。ZET が確定した実際の計画（`tests/fixtures/zet-final-plan.json`）で、スキーマと plan_hash の互換性も確認しています。
+root で実行すると「読めないファイル」のテストは SKIP になります（一般ユーザーでは実行されます）。ZET が確定した実際の計画で、スキーマと plan_hash の互換性も確認しています（`tests/fixtures/zet-final-plan.json` は round 3 より前の ZET の出力で新しい任意フィールドを持たない。`tests/fixtures/zet-final-plan-r3.json` は `items[].skillpact` と `action.evidence_hash` を持ち、GER が G-1 で再検査する ZET の不変条件にも合格すること）。
 
 ## ライセンス
 

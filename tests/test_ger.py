@@ -132,6 +132,20 @@ class TestVendorAndCompat(Base):
         self.assertEqual(validator("vendor/remediation-plan.schema.json").errors(plan), [])
         self.assertEqual(plan_hash(plan), plan["plan_hash"], "plan_hash の定義が ZET と一致しません")
 
+    def test_zet_r3_finalized_plan_passes_reverified_invariants(self):
+        # ZET（round 3 以降）の finalize の実出力: items[].skillpact と action.evidence_hash を持つ。
+        # G-1 で再検査する ZET の不変条件に、正しく作られた計画が引っかからないこと
+        plan = json.loads((FIX / "zet-final-plan-r3.json").read_text())
+        self.assertEqual(validator("vendor/remediation-plan.schema.json").errors(plan), [])
+        self.assertEqual(plan_hash(plan), plan["plan_hash"])
+        self.assertTrue(any("skillpact" in it for it in plan["items"]))
+        self.assertTrue(all("evidence_hash" in it["action"] for it in plan["items"] if it["action"]))
+        self.assertEqual(gates._zet_invariants(plan, now_utc(NOW)), [])
+        bad = copy.deepcopy(plan)
+        it = next(i for i in bad["items"] if i.get("skillpact") and i["skillpact"]["divergence"])
+        it.update(decision="exception", exception_type="risk_accepted", reason="x", action=None)
+        self.assertIn("I-5", " ".join(r.message for r in gates._zet_invariants(bad, now_utc(NOW))))
+
     def test_lite_validator_agrees_with_jsonschema(self):
         try:
             from jsonschema import Draft202012Validator
@@ -142,6 +156,10 @@ class TestVendorAndCompat(Base):
         bad2 = copy.deepcopy(inp); bad2["findings"] = {}
         cases = [("ger-input.schema.json", x) for x in (inp, bad, bad2)]
         cases.append(("vendor/remediation-plan.schema.json", json.loads((FIX / "zet-final-plan.json").read_text())))
+        r3 = json.loads((FIX / "zet-final-plan-r3.json").read_text())
+        cases.append(("vendor/remediation-plan.schema.json", r3))
+        bad3 = copy.deepcopy(r3); next(i for i in bad3["items"] if i["action"])["action"]["skillpact_effects"] = ["EXEC"]
+        cases.append(("vendor/remediation-plan.schema.json", bad3))
         for name, inst in cases:
             schema = json.loads((ROOT / "schemas" / name).read_text())
             self.assertEqual(validator(name).is_valid(inst), Draft202012Validator(schema).is_valid(inst), name)
