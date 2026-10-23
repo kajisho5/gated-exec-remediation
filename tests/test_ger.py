@@ -473,6 +473,21 @@ class TestExecution(Base):
             self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "出力先が不正なのに変更されています")
         self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
 
+    def test_output_empty_or_trailing_slash_rejected_before_changes(self):
+        # abspath は "" を cwd に、末尾の / を落として解釈するため、書けない出力先が事前確認を通っていた
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        existing = self.d / "existing.json"; existing.write_text("old")
+        n = len(audit.log_path().read_text().splitlines())
+        for out in ("", str(self.d / "nd") + "/", str(existing) + "/", str(existing) + "/x", str(self.d / "nd" / "..")):
+            code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", out)
+            self.assertEqual(code, 64, (out, err))
+            self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), f"出力先が不正なのに変更されています: {out!r}")
+        self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
+        self.assertEqual(existing.read_text(), "old")
+        self.assertFalse((self.d / "nd").exists())
+
     def test_output_must_not_be_audit_log_or_input(self):
         inp = self.ger_input()
         self.assertEqual(self.ger("dry-run", inp)[0], 0)

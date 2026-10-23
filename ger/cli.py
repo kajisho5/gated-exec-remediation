@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import stat
 import sys
 
 from . import audit, executor
@@ -66,9 +67,17 @@ def _check_output(path: str, input_path: str) -> None:
 
     os.replace で置き換えるため、監査ログ（とそのディレクトリ内のファイル）や入力ファイルは指定できない。
     """
-    if os.path.isdir(path):
+    if not path or path.endswith("/"):  # abspath は "" を cwd に、末尾の / を落として解釈してしまう
+        raise ValueError(f"-o にはファイルのパスを指定してください（空のパス・末尾が / のパスは不可）: {path!r}")
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        st = None
+    except OSError as e:  # 途中の要素がファイル（ENOTDIR）など
+        raise ValueError(f"-o の出力先を確認できません: {path}（{e.strerror}）") from None
+    if st is not None and stat.S_ISDIR(st.st_mode):
         raise ValueError(f"-o にディレクトリは指定できません: {path}")
-    d = os.path.dirname(os.path.abspath(path))
+    d = os.path.dirname(path) or "."  # 与えられたパスのままの親（abspath で .. などを畳まない）
     if not os.path.isdir(d):
         raise ValueError(f"-o の出力先ディレクトリがありません: {d}")
     if not os.access(d, os.W_OK | os.X_OK):
