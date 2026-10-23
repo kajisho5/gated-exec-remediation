@@ -40,7 +40,7 @@
 | **チェックリスト** | ロックファイル・requirements の侵害版・脆弱版、`*.egg-info` と RECORD の無い `*.dist-info`、サーバー・ランタイムの CVE（GitLab・TeamCity・Jenkins・PHP・Node.js・CA バンドルなど）、GitHub Actions の pwn request と SHA 固定されていないアクション・イメージ、`npx` / `uvx` の版を固定していない MCP サーバー、ドット区切りのキーやインラインテーブルで定義した Codex の TOML、crontab、環境変数、`.env`、秘密情報・トークン、シェル履歴、ビルドフック、`trust_remote_code`、cosign のフラグ、SBOM | 具体的な手順つきの `checklist`（CL-PKG・CL-VENV・CL-UPGRADE・CL-PHP・CL-PWN・CL-PIN・CL-MCP-PIN・CL-CRON・CL-ENV・CL-SECRET・CL-IR・CL-REVIEW など） |
 | **自動化しない** | ロックファイルの手での書き換え、ネットワークでタグを SHA に・版をダイジェストに解決すること、パッケージのインストール・更新・OS の更新・イメージの再ビルド、秘密情報の失効・ローテーション、`launchctl` / `systemctl` / `crontab` / `bpftool` / `rmmod` とプロセスの停止、git 履歴の書き換え・push・GitHub 上のワークフローの無効化、隔離ストアからの削除、コードの意味を変える修正、シェル履歴の編集（証拠のため） | 設計上の対象外。外部プロセス・ネットワーク・人の判断が要るか、元に戻せないため |
 
-ZES のフィクスチャ（37 のツリー、共有のテスト用ホームを含めて 237 件）では、Phase 1 で 53 件を自動で取り除き、残る 184 件は計画したチェックリスト（146 件）・defer / exception（31 件）・held（7 件）とちょうど一致します。`ger restore` で 237 件すべてが戻ります（[E2E](#e2ezes--zet--ger--zes) を参照）。
+ZES のフィクスチャ（53 のツリー、共有のテスト用ホームを含めて 331 件）では、Phase 1 で 80 件を自動で取り除き、残る 251 件は計画したチェックリスト（185 件）・defer / exception（47 件）・held（19 件）とちょうど一致します。`ger restore` で 331 件すべてが戻ります（[E2E](#e2ezes--zet--ger--zes) を参照）。
 
 ## 使い方
 
@@ -168,7 +168,7 @@ root で実行すると「読めないファイル」のテストは SKIP にな
 
 `tests/run-e2e.sh` は ZES のフィクスチャ（とそのホーム）を一時ディレクトリに写し、`zes-scan.sh` で検知し（ZES のリポジトリは読むだけ）、`zet draft`、提案の採用（できるものは自動、それ以外はチェックリスト。`ger preview` が拒否したものはチェックリストに切り替える）、`ger preview`、`zet finalize`、承認、`ger dry-run`、`ger apply`、再スキャン、ストアの全エントリの `ger restore`、3 回目のスキャンを行います。合格の条件は、再スキャンで残る finding がチェックリスト・defer・exception・held の item とちょうど一致し、restore 後のスキャンが最初のスキャンと一致する（finding の id も一致する）ことです。
 
-ZES `origin/main` 98ee340 での結果（件数は finding の数。「自動」は GER がファイルを変える操作で直し、再スキャンで消えた finding。「チェックリスト」は `pending_manual` の item。「held」は ZES がエラーを出したモジュール（ここではオフラインで省いた §6）の finding）:
+ZES v0.4.0（92be8b7、findings 1.1）と ZET `main` 9792941 での結果（件数は finding の数。「自動」は GER がファイルを変える操作で直し、再スキャンで消えた finding。「チェックリスト」は `pending_manual` の item。「held」は ZES がエラーを出したモジュールの finding。オフラインで省いた §6 と、わざと解析できない入力を置いたモジュール（§21 の YAML のエイリアス、§15 の `bun.lockb`、§49 の壊れた `skill.contract.json` など））:
 
 | フィクスチャ | 検知 | 自動 | チェックリスト | defer / exception | held | apply 後 | restore 後 | 結果 |
 |---|---|---|---|---|---|---|---|---|
@@ -190,14 +190,30 @@ ZES `origin/main` 98ee340 での結果（件数は finding の数。「自動」
 | ioc-corrections | 14 | 2 | 11 | 1 | 0 | 12 | 14 | ok |
 | ioc-corrections-safe | 5 | 0 | 4 | 1 | 0 | 5 | 5 | ok |
 | linux | 4 | 2 | 1 | 1 | 0 | 2 | 4 | ok |
-| litellm | 9 | 4 | 3 | 1 | 1 | 5 | 9 | ok |
+| litellm | 10 | 5 | 3 | 1 | 1 | 5 | 10 | ok |
 | lockfile-formats | 10 | 0 | 9 | 1 | 0 | 10 | 10 | ok |
+| lockfile-installed | 4 | 1 | 2 | 1 | 0 | 3 | 4 | ok |
 | macos | 4 | 2 | 1 | 1 | 0 | 2 | 4 | ok |
 | mcp | 4 | 1 | 2 | 1 | 0 | 3 | 4 | ok |
 | mcp-registry | 4 | 2 | 1 | 1 | 0 | 2 | 4 | ok |
 | parser-evasion | 19 | 7 | 11 | 1 | 0 | 12 | 19 | ok |
 | php | 8 | 1 | 6 | 1 | 0 | 7 | 8 | ok |
 | php2shell | 11 | 0 | 8 | 3 | 0 | 11 | 11 | ok |
+| r3-actions | 19 | 0 | 10 | 1 | 8 | 19 | 19 | ok |
+| r3-ai-instr | 10 | 0 | 9 | 1 | 0 | 10 | 10 | ok |
+| r3-archive | 2 | 0 | 1 | 1 | 0 | 2 | 2 | ok |
+| r3-crlf-toolversions | 4 | 0 | 2 | 1 | 1 | 4 | 4 | ok |
+| r3-dpkg | 3 | 0 | 1 | 1 | 1 | 3 | 3 | ok |
+| r3-hosts-space | 3 | 0 | 2 | 1 | 0 | 3 | 3 | ok |
+| r3-ioc-case | 3 | 1 | 1 | 1 | 0 | 2 | 3 | ok |
+| r3-lockfiles | 4 | 0 | 1 | 1 | 2 | 4 | 4 | ok |
+| r3-mcp-evasion | 11 | 9 | 1 | 1 | 0 | 2 | 11 | ok |
+| r3-nul | 4 | 1 | 2 | 1 | 0 | 3 | 4 | ok |
+| r3-pkgjson | 6 | 4 | 1 | 1 | 0 | 2 | 6 | ok |
+| r3-pth | 5 | 3 | 1 | 1 | 0 | 2 | 5 | ok |
+| r3-skillpact-script | 6 | 4 | 1 | 1 | 0 | 2 | 6 | ok |
+| r3-symlink-config | 4 | 0 | 3 | 1 | 0 | 4 | 4 | ok |
+| r3-vcs-nested | 5 | 3 | 1 | 1 | 0 | 2 | 5 | ok |
 | sbom | 5 | 0 | 4 | 1 | 0 | 5 | 5 | ok |
 | skillpact-clean | 0 | 0 | 0 | 0 | 0 | 0 | 0 | ok |
 | skillpact-diff-anomaly | 1 | 1 | 0 | 0 | 0 | 0 | 1 | ok |
@@ -209,9 +225,9 @@ ZES `origin/main` 98ee340 での結果（件数は finding の数。「自動」
 | skillpact-undeclared | 1 | 0 | 0 | 1 | 0 | 1 | 1 | ok |
 | skillpact-version | 1 | 0 | 1 | 0 | 0 | 1 | 1 | ok |
 | symjack | 3 | 1 | 1 | 1 | 0 | 2 | 3 | ok |
-| **合計** | **237** | **53** | **146** | **31** | **7** | **184** | **237** | **37/37** |
+| **合計** | **331** | **80** | **185** | **47** | **19** | **251** | **331** | **53/53** |
 
-`ger preview` が拒否してチェックリストに切り替えたもの: Codex の `a-dotted-top`・`d-dotted-under-table`・`i-inline-nested`（ドット区切りのキーやインラインテーブルで定義したサーバー）と、litellm の `litellm-1.107.0.dist-info`（RECORD が無く、メタデータだけを隔離するとコードが残るため。Q-6）。
+`ger preview` が拒否してチェックリストに切り替えたもの: Codex の `a-dotted-top`・`d-dotted-under-table`・`i-inline-nested`（ドット区切りのキーやインラインテーブルで定義したサーバー）、litellm の `litellm-1.107.0.dist-info`（RECORD が無く、メタデータだけを隔離するとコードが残るため。Q-6）、r3-symlink-config の `ev/.vscode/tasks.json` と `ev/.mcp.json`（対象がシンボリックリンク。GER はリンク越しに編集しない）。
 
 ## ライセンス
 

@@ -42,7 +42,7 @@ Being honest about this matters more than the count. "Auto" below means GER make
 | **Checklist** | Lock files and requirements files (compromised or vulnerable versions), `*.egg-info` and RECORD-less `*.dist-info`, server/runtime/CVE upgrades (GitLab, TeamCity, Jenkins, PHP, Node.js, CA bundles…), GitHub Actions pwn requests and unpinned actions/images, `npx`/`uvx` unpinned MCP servers, Codex TOML servers defined with dotted keys or inline tables, crontab, environment variables, `.env` files, secrets and tokens, shell history, build hooks, `trust_remote_code`, cosign flags, SBOMs | `checklist` with concrete steps (CL-PKG, CL-VENV, CL-UPGRADE, CL-PHP, CL-PWN, CL-PIN, CL-MCP-PIN, CL-CRON, CL-ENV, CL-SECRET, CL-IR, CL-REVIEW…) |
 | **Never automated** | Hand-editing lock files; resolving tags to SHAs or versions to digests over the network; installing/upgrading packages, OS updates, image rebuilds; revoking or rotating secrets; `launchctl` / `systemctl` / `crontab` / `bpftool` / `rmmod` and killing processes; rewriting git history, pushing, disabling workflows on GitHub; purging the quarantine store; code-semantic fixes; editing shell history (it is evidence) | Out of scope by design: these need external processes, the network, or a human decision, or cannot be undone |
 
-Run on ZES's own fixtures (37 fixture trees, 237 findings including the shared test home), Phase 1 removes 53 findings automatically; the remaining 184 are exactly the planned checklist (146), defer / exception (31) and held (7) items, and `ger restore` brings all 237 back (see [End to end](#end-to-end-zes--zet--ger--zes)).
+Run on ZES's own fixtures (53 fixture trees, 331 findings including the shared test home), Phase 1 removes 80 findings automatically; the remaining 251 are exactly the planned checklist (185), defer / exception (47) and held (19) items, and `ger restore` brings all 331 back (see [End to end](#end-to-end-zes--zet--ger--zes)).
 
 ## Usage
 
@@ -172,7 +172,7 @@ When run as root, the "unreadable file" test is SKIPped (as a regular user it ru
 
 `tests/run-e2e.sh` copies each ZES fixture tree (and its home) to a temporary directory, scans it with `zes-scan.sh` (read-only use of the ZES checkout), runs `zet draft`, adopts the suggestions (auto where possible, otherwise the checklist; `ger preview` rejections fall back to the checklist), `ger preview`, `zet finalize`, approval, `ger dry-run`, `ger apply`, re-scans, then `ger restore` of everything in the store and a third scan. A fixture passes when the re-scan leaves exactly the checklist, defer, exception and held items, and the scan after restore equals the first scan (same finding ids).
 
-Result with ZES `origin/main` 98ee340 (counts are findings; "Auto" are findings whose item GER fixed with a file-changing action, all of which disappeared on the re-scan; "Checklist" are `pending_manual` items; "Held" are findings of modules that ZES reported as errors, here §6 skipped offline):
+Result with ZES v0.4.0 (92be8b7, findings 1.1) and ZET `main` 9792941 (counts are findings; "Auto" are findings whose item GER fixed with a file-changing action, all of which disappeared on the re-scan; "Checklist" are `pending_manual` items; "Held" are findings of modules that ZES reported as errors: §6 skipped offline, and modules that hit a deliberately unparseable input such as a YAML alias in §21, `bun.lockb` in §15 or a malformed `skill.contract.json` in §49):
 
 | Fixture | Before | Auto | Checklist | Defer / exc. | Held | After apply | After restore | Result |
 |---|---|---|---|---|---|---|---|---|
@@ -194,14 +194,30 @@ Result with ZES `origin/main` 98ee340 (counts are findings; "Auto" are findings 
 | ioc-corrections | 14 | 2 | 11 | 1 | 0 | 12 | 14 | ok |
 | ioc-corrections-safe | 5 | 0 | 4 | 1 | 0 | 5 | 5 | ok |
 | linux | 4 | 2 | 1 | 1 | 0 | 2 | 4 | ok |
-| litellm | 9 | 4 | 3 | 1 | 1 | 5 | 9 | ok |
+| litellm | 10 | 5 | 3 | 1 | 1 | 5 | 10 | ok |
 | lockfile-formats | 10 | 0 | 9 | 1 | 0 | 10 | 10 | ok |
+| lockfile-installed | 4 | 1 | 2 | 1 | 0 | 3 | 4 | ok |
 | macos | 4 | 2 | 1 | 1 | 0 | 2 | 4 | ok |
 | mcp | 4 | 1 | 2 | 1 | 0 | 3 | 4 | ok |
 | mcp-registry | 4 | 2 | 1 | 1 | 0 | 2 | 4 | ok |
 | parser-evasion | 19 | 7 | 11 | 1 | 0 | 12 | 19 | ok |
 | php | 8 | 1 | 6 | 1 | 0 | 7 | 8 | ok |
 | php2shell | 11 | 0 | 8 | 3 | 0 | 11 | 11 | ok |
+| r3-actions | 19 | 0 | 10 | 1 | 8 | 19 | 19 | ok |
+| r3-ai-instr | 10 | 0 | 9 | 1 | 0 | 10 | 10 | ok |
+| r3-archive | 2 | 0 | 1 | 1 | 0 | 2 | 2 | ok |
+| r3-crlf-toolversions | 4 | 0 | 2 | 1 | 1 | 4 | 4 | ok |
+| r3-dpkg | 3 | 0 | 1 | 1 | 1 | 3 | 3 | ok |
+| r3-hosts-space | 3 | 0 | 2 | 1 | 0 | 3 | 3 | ok |
+| r3-ioc-case | 3 | 1 | 1 | 1 | 0 | 2 | 3 | ok |
+| r3-lockfiles | 4 | 0 | 1 | 1 | 2 | 4 | 4 | ok |
+| r3-mcp-evasion | 11 | 9 | 1 | 1 | 0 | 2 | 11 | ok |
+| r3-nul | 4 | 1 | 2 | 1 | 0 | 3 | 4 | ok |
+| r3-pkgjson | 6 | 4 | 1 | 1 | 0 | 2 | 6 | ok |
+| r3-pth | 5 | 3 | 1 | 1 | 0 | 2 | 5 | ok |
+| r3-skillpact-script | 6 | 4 | 1 | 1 | 0 | 2 | 6 | ok |
+| r3-symlink-config | 4 | 0 | 3 | 1 | 0 | 4 | 4 | ok |
+| r3-vcs-nested | 5 | 3 | 1 | 1 | 0 | 2 | 5 | ok |
 | sbom | 5 | 0 | 4 | 1 | 0 | 5 | 5 | ok |
 | skillpact-clean | 0 | 0 | 0 | 0 | 0 | 0 | 0 | ok |
 | skillpact-diff-anomaly | 1 | 1 | 0 | 0 | 0 | 0 | 1 | ok |
@@ -213,9 +229,9 @@ Result with ZES `origin/main` 98ee340 (counts are findings; "Auto" are findings 
 | skillpact-undeclared | 1 | 0 | 0 | 1 | 0 | 1 | 1 | ok |
 | skillpact-version | 1 | 0 | 1 | 0 | 0 | 1 | 1 | ok |
 | symjack | 3 | 1 | 1 | 1 | 0 | 2 | 3 | ok |
-| **Total** | **237** | **53** | **146** | **31** | **7** | **184** | **237** | **37/37** |
+| **Total** | **331** | **80** | **185** | **47** | **19** | **251** | **331** | **53/53** |
 
-`ger preview` refused, and the run fell back to the checklist for: Codex `a-dotted-top`, `d-dotted-under-table` and `i-inline-nested` (servers defined with dotted keys or inline tables), and litellm's `litellm-1.107.0.dist-info` (no RECORD, so quarantining the metadata alone would leave the code; Q-6).
+`ger preview` refused, and the run fell back to the checklist for: Codex `a-dotted-top`, `d-dotted-under-table` and `i-inline-nested` (servers defined with dotted keys or inline tables), litellm's `litellm-1.107.0.dist-info` (no RECORD, so quarantining the metadata alone would leave the code; Q-6), and r3-symlink-config's `ev/.vscode/tasks.json` and `ev/.mcp.json` (the target is a symbolic link; GER does not edit through links).
 
 
 ## License

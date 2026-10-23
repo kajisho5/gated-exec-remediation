@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### MCP の危険判定を ZES §17 に揃える（定義 T の表 `ger-hazards-2`）
+
+- **原因**: `disable_mcp_server` / `edit_json` / `edit_toml` の自動選択（`select: mcp.server`）が使う危険なコマンドの正規表現が ZES round 3 より前のもので、ZES が HIGH とする回避形（`cmd /c`、`deno eval`、`node --eval`、`bash --norc -c`、`bash -xc`、`perl -e`、`ruby -e`、`pwsh -Command`）に一致しなかった。`ger preview` が「取り除く対象が見つかりません」で拒否し、E2E の r3-mcp-evasion の 8 件がチェックリストに落ちていた
+- **変更**: MCP サーバーの判定に、ZES の `MCP_DANGER_RE` を写した `MCP_DANGER`（大文字小文字を区別しない。command の改行で分けた行ごと）を使う。エージェントフック（`claude.hook`）の判定は変えない
+- テスト: ZES と同じものを危険とし、`npx` / `node server.js` / `mybash -c` などは選ばないこと、`cmd.exe /c` のサーバーだけを取り除くこと
+- E2E（ZES v0.4.0）: 53/53、自動 72 → 80 件。README の E2E の表を更新
+
 ### findings 1.1: group の evidence の照合（G-7）と relation の確認（G-9）
 
 - **原因**: G-7 が、同じ `action.group` のすべての item に内容に基づく evidence（file / tree / symlink）の `hash` の一致を求めていた。findings 1.1 では 1 つの対象に別のファイルの finding がまとまる（skill_dir: スキルのディレクトリの `tree` と `skill.contract.json` の `file`。npm: `node_modules/<name>/package.json` とロックファイル）ため、正しい計画を拒否していた（E2E の skillpact-signed-divergence と lockfile-installed）
