@@ -35,6 +35,7 @@ ZET が確定した修復計画を、人間の明示承認を受けたうえで�
 | `ger verify <ger-input.json>` | ゲート 1〜6 の検証のみ（変更なし） | 0=OK / 3=拒否 / 64=引数 |
 | `ger dry-run <ger-input.json>` | 検証＋各操作の before/after を計算してログに記録（変更なし） | 0 / 3 |
 | `ger apply <ger-input.json>` | 検証＋同一計画の dry-run 記録を確認して実行。失敗時は全件ロールバック | 0 / 3=拒否 / 4=失敗しロールバック済 / 5=ロールバックも失敗 |
+| `ger verify-log [LOG]` | 監査ログのハッシュチェーンを検証（読むだけ。この実行は記録しない） | 0=健全 / 3=破損 / 64=ログが無い・読めない |
 
 `ger-input.json` は契約 §5（`schema_version` / `plan` / `approval` / `mode` / `allowed_actions`）。`mode` とサブコマンドが食い違う場合は拒否。
 
@@ -50,14 +51,14 @@ ZET が確定した修復計画を、人間の明示承認を受けたうえで�
 
 | # | ゲート | 拒否条件 | 根拠 |
 |---|---|---|---|
-| G-1 | スキーマ | 入力・plan が strict スキーマに不適合、`schema_version` 不一致、入力に `findings` キーがある | 飛び越し禁止・版固定 |
-| G-2 | 計画状態 | `plan.status` が `ok`/`partial` 以外（`draft`・`error` は拒否） | 失敗の伝播（ZET A-1） |
-| G-3 | 承認 | `approval.plan_id != plan.plan_id`、`approval_token != plan_hash`、`approved_by` が空 | 承認なき実行禁止（§3） |
+| G-1 | スキーマ | 入力・plan が strict スキーマに不適合、`schema_version` 不一致、入力に `findings` キーがある。plan だけで評価できる ZET の不変条件（I-1 の一意性、I-3、I-4 の action の形と対象パスの形、`items[].skillpact` に対する I-5 / I-6 / I-7 と `skillpact_effects` の整合、危険な効果の remediate の承認者 2 名、I-9 の日付の前後関係、I-11 の日時の実在、I-12 の partial と held）に反する | 飛び越し禁止・版固定・承認トークンは完全性しか示さないため（§4） |
+| G-2 | 計画状態 | `plan.status` が `ok`/`partial` 以外（`draft`・`error` は拒否）。`now_override: true` の plan（ZET が `--now` で作成）で `GER_ALLOW_NOW_OVERRIDE` が `1` でない。現在時刻が remediate の `due_at` の最大値を過ぎている | 失敗の伝播（ZET A-1）・テスト用の計画と期限切れの計画を実行しない |
+| G-3 | 承認 | `approval.plan_id != plan.plan_id`、`approval_token != plan_hash`、`approved_by` が空、`approved_at` が未来・plan 作成前・`GER_APPROVAL_MAX_AGE`（既定 7 日）より古い | 承認なき実行禁止（§3）・古い承認の再利用禁止 |
 | G-4 | 自己承認防止 | `approval.approved_by` に `--operator` が含まれる | 承認の連鎖 |
 | G-5 | 許可リスト | `action.type` が `allowed_actions` 外、または GER 未対応 | 許可リスト方式 |
-| G-6 | 二重承認 | `action.reversible == false` で `approval.approved_by` が 2 名未満。`action.skillpact_effects` に exec/network/spend/send（SkillPact 0.8）を含むのに、その操作が `allowed_actions` に明示されていない | `reversible: false`・SkillPact 不変条件 |
-| G-7 | 対象の事前検証（全件） | 対象が存在しない／絶対パスでない／`..` を含む／シンボリックリンク（`lstat`）／計画外のパス／操作固有の検証失敗 | 対象の限定・部分適用禁止 |
-| G-8 | dry-run 記録（apply のみ） | 同じ `plan_hash` と `input_hash` の dry-run 成功記録が監査ログに無い、または `GER_DRYRUN_TTL`（既定 24 時間）より古い | dry-run を経ない apply 禁止 |
+| G-6 | 二重承認 | `action.reversible == false` で `approval.approved_by` が 2 名未満。`action.skillpact_effects` に exec/network/spend/send（SkillPact 0.8）を含むのに、その操作が `allowed_actions` に明示されていない、または `approval.approved_by` が 2 名未満（ZET の I-6 も item の `approved_by` に 2 名を求める） | `reversible: false`・SkillPact 不変条件 |
+| G-7 | 対象の事前検証（全件） | 対象が存在しない／正規化済みの絶対パスでない／シンボリックリンク（`lstat`、途中経路を含む）／監査ログとその上位（`GER_LOG_DIR` の字句上の上位と実パスの上位の和集合）／操作固有の検証失敗（chmod: world-writable、現在の mode に無い権限ビットを足す）／`action.evidence_hash` が現在のファイルと不一致 | 対象の限定・部分適用禁止・修復は権限を絞るだけ |
+| G-8 | dry-run 記録（apply のみ） | 同じ `plan_hash` と `input_hash`、同じ `--now` の扱いの、未使用の dry-run 成功記録が監査ログに無い、または `GER_DRYRUN_TTL`（既定 24 時間）より古い。記録は実行まで進んだ apply（result が ok / rolled_back / rollback_failed / applied_unlogged）で使用済みになる | dry-run を経ない apply 禁止・1 回の dry-run で 1 回の apply |
 
 `held[]` は読まない。`items[]` のうち `decision == "remediate"` のものだけが実行対象（`exception` / `defer` は `skipped`）。
 
@@ -76,13 +77,22 @@ ZET が確定した修復計画を、人間の明示承認を受けたうえで�
 
 - 1 件でも `failed` が出たら残りは実行しない（契約 §7）
 - ロールバック自体が失敗した場合は終了コード 5、ログに対象と状態を全件記録して人手対応を促す
-- `chmod` の `params`: `{"mode": "0600"}`（8 進文字列のみ受理。setuid/setgid/sticky ビット付与は拒否）。ディレクトリへの再帰適用はしない（親・子への遡及禁止）
+- `chmod` の `params`: `{"mode": "0600"}`（8 進文字列のみ受理。setuid/setgid/sticky ビットと world-writable の付与は拒否）。ディレクトリへの再帰適用はしない（親・子への遡及禁止）
+- chmod は権限を絞る操作に限る: 新しい mode が現在の mode（G-7 で `lstat` した値）に無いビットを 1 つでも含めば拒否（`mode & ~before != 0`）。ロールバックは記録した `before` に戻すため、このゲートを通らない
+- `action.evidence_hash`（ZET A-8）があれば G-7 で現在のファイルと比べる。規則は ZES と同じ: 100MB 以下の通常ファイルは内容の SHA-256、100MB 超は `パス|サイズ|mtime（秒）` の SHA-256。ディレクトリは ZES が finding の detail をハッシュするため比べない。読めない通常ファイルは確かめられないため拒否
 
 ---
 
 ## 4. 承認トークン
 
 契約の `approval_token` は形式が未定義のため、**plan 本体の正規化 JSON（キー順ソート、区切り `,`/`:`、UTF-8）の SHA-256 = `plan_hash`** と一致することを要求する（ZET A-6）。承認者は確定 plan のハッシュに対して承認するので、承認後に plan を差し替えると G-3 で止まる。
+
+**限界**: `plan_hash` が示すのは完全性（ハッシュを計算した時点から変わっていないこと）だけで、真正性（ZET が作り、承認者がその内容を見たこと）ではない。finalize の後に plan を書き換えて `plan_hash` と `approval_token` を計算し直すと、暗号的には検出できない。そのため GER は次の多層防御を行う:
+
+- plan だけで評価できる ZET の不変条件を G-1 で再検査する（`items[].skillpact`（ZET A-9）があれば I-5 / I-6 / I-7 も）
+- chmod は権限を絞るだけ（G-7）。書き換えた plan でも権限を緩められない
+- 承認の有効期限（`GER_APPROVAL_MAX_AGE`、既定 7 日）と、remediate の `due_at` の最大値を過ぎた計画の拒否
+- findings が無いと確かめられない「対象が finding の path であること」（ZET の I-4）は確かめられない。書き換えた plan は、実行者が所有する別のファイルの権限を絞ることはできる
 
 将来の強化案（初版対象外）: 承認者ごとの署名（SSH 署名 `ssh-keygen -Y verify` 等）。ただし外部コマンド起動を伴うため、採用時は Zero-Exec 方針との整理が必要。
 
@@ -94,6 +104,8 @@ ZET が確定した修復計画を、人間の明示承認を受けたうえで�
 - 1 行 1 レコード: `skill`（"ger"）/ `version` / `command` / `plan_id` / `plan_hash` / `input_hash` / `output_hash` / `started_at` / `finished_at` / `operator` / `result` / `gate_failed`（拒否時）
 - 出力 `remediation-log.json`（契約 §6）は実行ごとに別ファイルで書き出し、そのハッシュを監査ログに残す
 - ハッシュチェーン（`prev_hash`）を持たせる（ZET B-2 と同方式）。G-8 は監査ログのチェーンが壊れていたら dry-run 記録を信用せず拒否する
+- 追記の前に、排他ロックの下で末尾の連結（最終行が改行で終わる JSON object で、`prev_hash` が直前の行と一致）を確かめ、壊れていれば追記しない（何も実行せず終了コード 64）。全体の検証は `ger verify-log`
+- `GER_LOG_DIR` は起動時に一度だけ実パスへ解決し、ログの読み書きはすべて解決後のパスで行う。G-7 では解決前（字句上）と解決後の両方の上位ディレクトリを保護する。-o の親ディレクトリも同様に両方の上位を計画の対象から外す（途中のシンボリックリンクを置いたディレクトリを chmod 0000 されると、そのパス経由で書けなくなるため）
 
 ---
 
@@ -138,6 +150,9 @@ gated-exec-remediation/
 | root 所有で権限不足 | 事前検証（`os.access` ではなく所有者・実効 UID で判定）で拒否 |
 | `mode` が `"600"`（先頭 0 なし）や `0o600` | 文字列 `^0[0-7]{3}$` のみ受理 |
 | ログディレクトリに書けない | 何も実行せず拒否（記録できない操作はしない） |
+| 監査ログの末尾が壊れている（途中で切れた行など） | 追記せず何も実行しない（64）。`ger verify-log` で確認し、ログを退避して再実行 |
+| 同じ dry-run で 2 回目の apply | G-8 で拒否（dry-run 記録は 1 回で使用済み） |
+| 実時刻の期限切れの dry-run を `--now` で期限内に見せる | G-8 で拒否（`--now` 付きの apply は `--now` 付きの dry-run だけを数える） |
 
 ---
 
