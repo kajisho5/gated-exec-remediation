@@ -16,7 +16,7 @@ from unittest import mock
 
 from ger import audit, cli, executor, gates
 from ger.actions import chmod
-from ger.core import ROOT, canonical, now_utc, plan_hash, validator
+from ger.core import ROOT, canonical, input_hash, now_utc, plan_hash, validator
 
 FIX = ROOT / "tests" / "fixtures"
 PLAN_ID = "11111111-2222-4333-8444-555555555555"
@@ -213,6 +213,20 @@ class TestGates(Base):
         code, err = self.ger("verify", self.ger_input(plan=p))
         self.assertEqual(code, 3, err)
         self.assertIn("G-1", err); self.assertIn("finding_id が重複", err)
+
+    def test_g1_invalid_calendar_timestamps(self):
+        inp = self.ger_input(); inp["approval"]["approved_at"] = "2026-02-30T11:00:00Z"
+        self.assertRejected(inp, "G-1")
+        p = self.plan(created_at="2026-10-22T25:00:00Z")
+        code, err = self.ger("verify", self.ger_input(plan=p))
+        self.assertEqual(code, 3, err)
+        self.assertIn("plan.created_at が実在しない日時です", err)
+
+    def test_g8_unparseable_dry_run_record_is_ignored(self):
+        inp = self.ger_input(mode="apply")
+        audit.append({"command": "dry-run", "result": "ok", "plan_hash": inp["plan"]["plan_hash"],
+                      "input_hash": input_hash(inp), "finished_at": "2026-02-30T00:00:00Z"})
+        self.assertRejected(inp, "G-8", command="apply")
 
     def test_g7_nul_byte_in_target(self):
         self.assertRejected(self.ger_input(plan=self.plan([str(self.targets[0]) + "\x00x"])), "G-7")

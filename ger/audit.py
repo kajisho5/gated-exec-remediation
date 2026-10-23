@@ -88,7 +88,10 @@ def find_dry_run(plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds:
         rec = json.loads(line)
         if (rec.get("command") == "dry-run" and rec.get("result") == "ok"
                 and rec.get("plan_hash") == plan_hash and rec.get("input_hash") == input_hash):
-            age = (now - parse_ts(rec["finished_at"])).total_seconds()
+            try:
+                age = (now - parse_ts(rec["finished_at"])).total_seconds()
+            except (KeyError, TypeError, ValueError):  # 解釈できない記録は有効な dry-run として扱わない
+                continue
             if 0 <= age <= ttl_seconds:
                 found = rec
     return found

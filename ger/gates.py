@@ -42,6 +42,15 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
         return r, []
     if command in ("dry-run", "apply") and inp["mode"] != command:
         return [Rejection("G-1", f"入力の mode={inp['mode']} とコマンド {command} が一致しません")], []
+    # G-1 日時の実在（パターンは 2026-02-30 や T25:00:00 も通すため、ここで解釈できることを確かめる）
+    bad_ts = []
+    for label, v in (("approval.approved_at", inp["approval"]["approved_at"]), ("plan.created_at", plan["created_at"])):
+        try:
+            parse_ts(v)
+        except ValueError:
+            bad_ts.append(Rejection("G-1", f"{label} が実在しない日時です: {v}"))
+    if bad_ts:
+        return bad_ts, []
     # G-1 finding_id の重複（実行結果・ロールバックを item に一意に対応づけられない計画は構造不正）
     fids = [it["finding_id"] for it in plan["items"] if it["decision"] == "remediate"]
     dup = sorted({f for f in fids if fids.count(f) > 1})
