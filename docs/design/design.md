@@ -246,6 +246,8 @@ Phase 1 で追加したファイル: `ger/fsutil.py`（fd でたどる対象の�
 | `skill_dir` | target == finding_path、または finding_path が target の `skill.contract.json` | `skill.contract.json` か `SKILL.md` がある |
 | `none` | target が null（checklist だけ） | — |
 
+group（同じ対象への複数の finding）では、1 件目だけでなく全件の relation を字句上・ファイルシステム上で確かめる（finding_path が違う item が混ざるため）。
+
 ### 10.4 隔離ストア（Q-2）
 
 - 場所: `GER_QUARANTINE_DIR`、なければ `$XDG_STATE_HOME/ger/quarantine`、なければ `~/.local/state/ger/quarantine`。起動時に実パスへ解決。所有者は実行ユーザー、mode 0700、マーカー `.ger-quarantine-store`
@@ -282,7 +284,7 @@ Phase 1 で追加したファイル: `ger/fsutil.py`（fd でたどる対象の�
 |---|---|---|---|
 | 検査範囲 | `ger-input.scope.roots` | `plan.scope`（`roots` と `home`） | 承認トークン（plan_hash）で束縛するため。ZET が triage-input の `policy.scope`（1.1 では findings の `scan_roots`）から作る |
 | evidence が detail の finding | quarantine も編集もしない | params に固定した preview のハッシュ（承認の対象）で照合して実行する | findings 1.0 ではディレクトリ・リンクの evidence が常に detail のため（設計 §3.0 の「1.0 のディレクトリは preview のハッシュを使う」に合わせた） |
-| group の evidence.hash の一致 | 必須 | 内容に基づく evidence（file / tree / symlink）だけ一致を求める | detail の evidence は finding ごとの文言のハッシュで一致しないため |
+| group の evidence.hash の一致 | 必須 | 同じ `finding_path` の item どうしで、内容に基づく evidence（file / tree / symlink）だけ一致を求める。`finding_path` が違う item の間では比べない。どの item の evidence も、それぞれの `finding_path` から導き直して照合する（G-7、item ごと・全件）。group の各 item の relation も 1 件ずつ確かめる（G-9） | detail の evidence は finding ごとの文言のハッシュで一致しないため。findings 1.1 では 1 つの対象に別のファイルの finding がまとまる（skill_dir: ディレクトリの tree と `skill.contract.json` の file、npm: `node_modules/<name>/package.json` とロックファイル）。別のファイルのハッシュは一致しようがなく、一致を求めても何も保証しない。保証（検知時から変わっていない）は item ごとの照合で保つ |
 | edit_toml | Phase 2 | Phase 1 の範囲（標準のテーブルヘッダ）で実装 | オーナーの指示 |
 | ジャーナル | 全操作 | quarantine と編集（chmod だけの計画はジャーナルを作らない。従来どおりプロセス内でロールバック） | chmod だけの利用者に隔離ストアを作らせないため |
 | デバイスごとのストア | `GER_QUARANTINE_DIRS` | 未実装（別のデバイスは拒否） | Phase 1 は拒否で足りる |
