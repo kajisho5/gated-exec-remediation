@@ -292,3 +292,22 @@ Phase 1 で追加したファイル: `ger/fsutil.py`（fd でたどる対象の�
 ### 10.10 ZES の finding と Phase 1 の扱い（E2E の結果）
 
 ZES の `tests/fixtures`（`origin/main` 98ee340）を写して ZES → ZET → GER → ZES を通しで実行した結果は README の「E2E」の表を参照（`tests/run-e2e.sh`）。
+
+### 10.11 ZES 側の変更（findings 1.1。未適用）
+
+ZES は今回変更していない。ZET と GER は findings 1.0 で動き、1.1 の項目は任意で受け付ける。ZES に適用する変更:
+
+1. `schemas/findings.schema.json`: ZET の `schemas/vendor/findings-1.1-draft.schema.json`（ZET 2ab7a53）を正として写す（`$id`・title・description を ZES のものに戻す）。差分は `schema_version` を `"1.1"`、トップレベルに `scan_roots`（`--root` の実パスの配列）、finding に任意の `kind`・`subject`・`locators`・`related`・`evidence`
+2. `tests/run-tests.sh`: `REQUIRED_TOP` に `scan_roots` を足す。finding のキーの照合を `(keys - ["skillpact","kind","subject","locators","related","evidence"])` にする
+3. `emit()`（`zes-scan.sh` 230-260）: 任意の 6 番目の引数（JSON の断片）で kind / subject / locators / related を足す。id の作り方（`module|campaign|path|detail`）と `evidence_hash` は変えない（`tests/expected` との照合を保つ）。`evidence` を毎回出す: 通常ファイルは `file`（100MB 超は `large_file`）で今の `evidence_hash` と同じ値、シンボリックリンクは `symlink` で readlink の値（バイト列）の SHA-256、ディレクトリは `tree` で ger-tree-v1（§10.8。テストベクタ `sha256:a0330bed…958e` を ZES のテストにも入れる）、それ以外は `detail`
+4. モジュールごと（Phase 1 で使うもの）:
+   - §15（768-801）: `kind` = `pkg.compromised`（侵害パッケージ）/ `pkg.vulnerable`（脆弱な版）/ `pkg.lockfile_compromised`（ロックファイルにある侵害版）、`subject` = `{ecosystem, package, version, safe_version, fixed_versions}`。ロックファイルの finding は、隣の `node_modules/<name>/package.json` があれば `related: [{relation: "npm_installed", path: "<dir>/node_modules/<name>"}]`
+   - §17（2043-2068）: `kind` = `mcp.dangerous_command` / `mcp.unpinned`、`locators` = 該当するサーバーごとに `{format: json|jsonc|toml, pointer: "/mcpServers/<name>"}`（TOML は `"/mcp_servers/<name>"`。今は同じファイルの同じ種類の問題が 1 件にまとまるため、locators で複数を並べる）。SymJack は `evidence.kind = symlink`
+   - §7（1601-1612）: hooks は `locators: [{format: json, pointer: "/hooks/<Event>/<i>"}]`、`runOn` は `"/tasks/<i>/runOptions/runOn"`
+   - §10 / §31 / §26 / §4 の php.ini: `locators: [{format: text, line, line_sha256}]`（行の SHA-256 は改行・CR・1 行目の BOM を除いたバイト列。GER の remove_line と同じ）
+   - §24: `related: [{relation: "ext_dir", path: "…/Extensions/<id>"}]`（**設計 0.2 からの変更**: evidence を ext_dir のツリーハッシュにすると、GER は finding_path（manifest.json）の evidence として照合するため一致しない。evidence は manifest のファイルのまま、ツリーは preview の `tree_sha256` で固定する）
+   - §49: divergence（path がスキルのディレクトリ）は `evidence.kind = tree`、`skill.contract.json` の finding は `related: [{relation: "skill_dir", path: <dir>}]`
+   - §21 / §22 / §28 / §47 / §3 §5 §6 §16 §37 §41: `kind`（`gha.pwn_request`・`gha.unpinned`・`secret.token`・`runtime.cve`）。ZET の I-13 はこの kind で操作を絞る
+5. 隔離ストアを走査しない: すべての `find` で `.ger-quarantine-store` のあるディレクトリを prune する
+6. `docs/skill-contracts.md:156` の「親ディレクトリへの遡及禁止」を「`relation` で導ける対象に限り、それ以外へは遡及しない」に改める（`:184` のファイル内容を出さない原則は変えない）
+7. ZES が 1.1 を出したら: ZET の `schemas/vendor/findings-1.1-draft.schema.json` を ZES の `schemas/findings.schema.json` の写しに置き換え、VENDOR.json の `status: draft` を外して `source_commit` を入れる（GER は findings を読まないため変更不要）
