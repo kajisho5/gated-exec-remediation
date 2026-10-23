@@ -1,6 +1,7 @@
 """chmod 操作。外部コマンドを使わず os.fchmod / os.chmod で行う。
 
-- params は {"mode": "0NNN"}（8 進 3 桁）のみ。setuid / setgid / sticky ビットは付与できない
+- params は {"mode": "0NNN"}（8 進 3 桁）のみ。setuid / setgid / sticky ビットと world-writable は付与できない
+- 現在の mode に無い権限を足す chmod は G-7 で拒否する（修復は権限を絞る操作に限る）
 - 対象は事前検証時の (st_dev, st_ino, st_ctime_ns) と一致することを適用直前に確認する（差し替え検出）。
   i-node 番号は削除・再作成で再利用されうるため、ctime も含めて同一実体を判定する
 - 再帰しない。シンボリックリンクは辿らない
@@ -27,7 +28,10 @@ class ActionError(Exception):
 def parse_params(params: dict) -> int:
     if set(params) != {"mode"} or not isinstance(params["mode"], str) or not _MODE.fullmatch(params["mode"]):
         raise ActionError('params は {"mode": "0NNN"}（8 進 3 桁、特殊ビットなし）のみ受け付けます')
-    return int(params["mode"], 8)
+    mode = int(params["mode"], 8)
+    if mode & 0o002:  # ZET の I-4 と同じ。現在の mode に権限を足さないこと（G-7）とは別に、静的に拒否する
+        raise ActionError("他者の書き込み権限（world-writable）を付ける chmod は受け付けません")
+    return mode
 
 
 def fmt(mode: int) -> str:

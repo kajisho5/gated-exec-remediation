@@ -4,16 +4,16 @@
       "path": "schemas/vendor/remediation-plan.schema.json",
       "source_repo": "kajisho5/zero-exec-triage",
       "source_path": "schemas/remediation-plan.schema.json",
-      "source_commit": "5d63b3c06ede4f961ae6d0a17a9115aef19149f1",
+      "source_commit": "64bb2eb879066d3e90a76e490d3c9de1c84dafe4",
       "schema_version": "1.0",
-      "sha256": "7278b7417fb0ead7992899cecdc0d243f697fb98f8dec4c6031f1f261d31be4d"
+      "sha256": "8eb8fcfe23ddea21362dd6fba95d4f8e33c88edc90398de7db1be413371bddd0"
     },
     {
       "path": "ger/jsonschema_lite.py",
       "source_repo": "kajisho5/zero-exec-triage",
       "source_path": "zet/jsonschema_lite.py",
-      "source_commit": "09e704ddadd8e571ae65052e65dfcacd65ba8b3c",
-      "sha256": "c6d74206f20ca9cf6340913fe7ec532f3e476a042652e7f033e6d607faf0c468"
+      "source_commit": "20c0a18ecbe3345365443a1fd3948fe98d08c53e",
+      "sha256": "5fa67400a5c6aeb63b26f98eb6534afe47174ccfe3c8d2c38b93439b85a436bf"
     }
   ]
 }

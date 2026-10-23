@@ -1,0 +1,358 @@
+{
+  "created_at": "2026-10-22T10:00:00Z",
+  "held": [],
+  "items": [
+    {
+      "action": {
+        "evidence_hash": "sha256:827bfb7bf466b39d944e114018a700a396ea8755d6a5541a2cace015d3d80a1e",
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/skillpact-policy/policies/broken.json",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-12-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:566207f869ce8a25bd1939f7b176fa42abf4e28a26164456e59ecb4fe9091449",
+      "level_effective": "MEDIUM",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z",
+      "skillpact": {
+        "declared_effects": [],
+        "diff_anomaly": false,
+        "divergence": [],
+        "signed": false
+      }
+    },
+    {
+      "action": {
+        "evidence_hash": "sha256:4a405944dfc3c37bd019a677dc8394e6c43091b0c9eff0dd6172c9448c106674",
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "read",
+          "write",
+          "network"
+        ],
+        "target": "/srv/zes-fixtures/skillpact-diff-anomaly/v2/skill.contract.json",
+        "type": "chmod"
+      },
+      "approved_by": [
+        "security-lead",
+        "platform-owner"
+      ],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-11-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:eaddb675d978a12d978f7b37a531b57d635272946e1a6fc87f642c8690ffe308",
+      "level_effective": "HIGH",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z",
+      "skillpact": {
+        "declared_effects": [
+          "read",
+          "write",
+          "network"
+        ],
+        "diff_anomaly": true,
+        "divergence": [],
+        "signed": true
+      }
+    },
+    {
+      "action": null,
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "defer",
+      "due_at": null,
+      "exception_type": null,
+      "finding_id": "sha256:4483eaf3491bf785173caa2e2177a395ecbe530dc5699be0aa465059e89a711a",
+      "level_effective": "HIGH",
+      "owner": null,
+      "reason": "target shared with another finding",
+      "recheck_at": "2026-11-05T10:00:00Z",
+      "skillpact": {
+        "declared_effects": [
+          "read",
+          "write",
+          "exec"
+        ],
+        "diff_anomaly": false,
+        "divergence": [
+          "read",
+          "network"
+        ],
+        "signed": false
+      }
+    },
+    {
+      "action": null,
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "defer",
+      "due_at": null,
+      "exception_type": null,
+      "finding_id": "sha256:0387fa9d3fbef95541b8fc49cd339e1093d01c27816c79708006173ecb264671",
+      "level_effective": "MEDIUM",
+      "owner": null,
+      "reason": "target shared with another finding",
+      "recheck_at": "2026-11-05T10:00:00Z",
+      "skillpact": {
+        "declared_effects": [
+          "read",
+          "write",
+          "exec"
+        ],
+        "diff_anomaly": false,
+        "divergence": [
+          "read",
+          "network"
+        ],
+        "signed": false
+      }
+    },
+    {
+      "action": {
+        "evidence_hash": "sha256:fdbb52e5dfee0c177d4bb08f56d340361bf9bc15d85654cdfae4e995787ae1f0",
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "read",
+          "write",
+          "exec"
+        ],
+        "target": "/srv/zes-fixtures/skillpact-divergence/persist-tool",
+        "type": "chmod"
+      },
+      "approved_by": [
+        "security-lead",
+        "platform-owner"
+      ],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-12-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:7ff38f8a6f6880eea5820dc494a36e3153f74ef53249b9986696eaa4a92b10c5",
+      "level_effective": "MEDIUM",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z",
+      "skillpact": {
+        "declared_effects": [
+          "read",
+          "write",
+          "exec"
+        ],
+        "diff_anomaly": false,
+        "divergence": [
+          "write"
+        ],
+        "signed": false
+      }
+    },
+    {
+      "action": {
+        "evidence_hash": "sha256:ab6d26ea6cc29e0799a6309ad2971a66e19e6053df90db4fefbc2dfc08dedd05",
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/skillpact-invalid/integrity-mismatch/skill.contract.json",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-12-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:ce93c5d13e253d5aa7b0b325149100f96daa5b0b1f5c321bea5977a9a66a6f2b",
+      "level_effective": "MEDIUM",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z",
+      "skillpact": {
+        "declared_effects": [],
+        "diff_anomaly": false,
+        "divergence": [],
+        "signed": false
+      }
+    },
+    {
+      "action": {
+        "evidence_hash": "sha256:52c650fef8d1dbca8cc133a5845246d77d8fbf3e6d42d607037eb03b9acc8356",
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/skillpact-invalid/undeclared-effect/skill.contract.json",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-12-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:a6db8b2a6a7a5d176a90ea8b9f3ec373782d90433d081e39b069070c800441f8",
+      "level_effective": "MEDIUM",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z",
+      "skillpact": {
+        "declared_effects": [],
+        "diff_anomaly": false,
+        "divergence": [],
+        "signed": false
+      }
+    },
+    {
+      "action": {
+        "evidence_hash": "sha256:8e0f684e21ecd6448cf3d5fa6a5f4d769a036d125f0547d0cf932b088d4ff76c",
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "exec"
+        ],
+        "target": "/srv/zes-fixtures/skillpact-signed-divergence/v08-valid-signed/skill.contract.json",
+        "type": "chmod"
+      },
+      "approved_by": [
+        "security-lead",
+        "platform-owner"
+      ],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-10-29T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:2e690fcf8bf6c984b071beb45834d421b5e9746cda837a54af7d59f8b3ecbe99",
+      "level_effective": "CRITICAL",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z",
+      "skillpact": {
+        "declared_effects": [
+          "exec"
+        ],
+        "diff_anomaly": false,
+        "divergence": [
+          "network"
+        ],
+        "signed": true
+      }
+    },
+    {
+      "action": {
+        "evidence_hash": "sha256:4d9097a5e5ca9fc9aac6bd26793fc686b5cb50e7c728bc71e348c9aaedcd7fac",
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [
+          "exec"
+        ],
+        "target": "/srv/zes-fixtures/skillpact-signed-divergence/v08-valid-signed",
+        "type": "chmod"
+      },
+      "approved_by": [
+        "security-lead",
+        "platform-owner"
+      ],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-10-29T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:fdec26b729581248abc665a49afcbc52dd7f03b773ba974257477511c69eba55",
+      "level_effective": "CRITICAL",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z",
+      "skillpact": {
+        "declared_effects": [
+          "exec"
+        ],
+        "diff_anomaly": false,
+        "divergence": [
+          "network"
+        ],
+        "signed": true
+      }
+    },
+    {
+      "action": null,
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "alice",
+      "decision": "defer",
+      "due_at": null,
+      "exception_type": null,
+      "finding_id": "sha256:acddfb785b9e94b0df7297c412161c1376d64a9ceb01a9fc7baca6901f09fd2a",
+      "level_effective": "INFO",
+      "owner": null,
+      "reason": "informational",
+      "recheck_at": "2026-11-05T10:00:00Z",
+      "skillpact": {
+        "declared_effects": [],
+        "diff_anomaly": false,
+        "divergence": [],
+        "signed": false
+      }
+    },
+    {
+      "action": {
+        "evidence_hash": "sha256:f62700f23232243225776b0b17b222c9c644af831f1c70bf3c15f1923e103655",
+        "params": {
+          "mode": "0600"
+        },
+        "reversible": true,
+        "skillpact_effects": [],
+        "target": "/srv/zes-fixtures/skillpact-version/version-unknown-major/skill.contract.json",
+        "type": "chmod"
+      },
+      "approved_by": [],
+      "decided_at": "2026-10-22T10:00:00Z",
+      "decided_by": "bob",
+      "decision": "remediate",
+      "due_at": "2026-12-21T10:00:00Z",
+      "exception_type": null,
+      "finding_id": "sha256:46135cceab2a2f51ebda69d89fe866ec69373f6e150e6762e9f73a7e977c9681",
+      "level_effective": "MEDIUM",
+      "owner": "team-a",
+      "reason": null,
+      "recheck_at": "2026-11-05T10:00:00Z",
+      "skillpact": {
+        "declared_effects": [],
+        "diff_anomaly": false,
+        "divergence": [],
+        "signed": false
+      }
+    }
+  ],
+  "plan_hash": "sha256:2411306e4d91dff30c1a36a6b6b1a9dadadb17c72b40b44e44e46f8f280014a3",
+  "plan_id": "11111111-2222-4333-8444-555555555555",
+  "schema_version": "1.0",
+  "status": "ok"
+}
