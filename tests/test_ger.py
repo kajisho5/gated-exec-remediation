@@ -342,6 +342,7 @@ class TestGates(Base):
         inp = self.ger_input()
         self.assertEqual(self.ger("dry-run", inp)[0], 0)
         self.assertEqual(self.ger("verify", inp)[0], 0)
+        self.assertEqual(self.ger("verify", inp)[0], 0)  # 末尾の連結は健全なまま、途中だけを壊す
         lines = audit.log_path().read_text().splitlines()
         lines[0] = lines[0].replace('"operator":"ops"', '"operator":"evil"')
         audit.log_path().write_text("\n".join(lines) + "\n")
@@ -361,7 +362,8 @@ class TestGates(Base):
         self.assertNotIn("now_override", json.loads(audit.log_path().read_text().splitlines()[-1]))
 
     def test_g8_garbage_audit_log_is_rejected_not_crash(self):
-        # 多バイト文字の途中で切れた最終行・object でない JSON 行・任意のバイト列は G-8 の拒否（70 ではない）
+        # 多バイト文字の途中で切れた最終行・object でない JSON 行・任意のバイト列: 途中にあれば G-8 の拒否（70 ではない）、
+        # 末尾にあれば壊れたチェーンには追記しないため何もせず 64（R3 F15）
         inp = self.ger_input()
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
         for garbage in ('{"operator":"あ'.encode()[:-1], b"null", b"[1,2]", b'"x"', bytes(range(256))):
@@ -371,7 +373,15 @@ class TestGates(Base):
                 f.write(garbage + b"\n")
             self.assertTrue(audit.verify_chain(), garbage)
             self.assertIsNotNone(audit.find_dry_run(inp["plan"]["plan_hash"], input_hash(inp), now_utc(NOW), 86400, True))
+            before = audit.log_path().read_bytes()
+            code, err = self.ger("apply", ap)
+            self.assertEqual(code, 64, err); self.assertIn("verify-log", err)
+            self.assertEqual(audit.log_path().read_bytes(), before)
+            # 途中にある場合（末尾は健全な記録）は G-8
+            last = [x for x in before.split(b"\n") if x.strip()][-1]
+            audit.log_path().write_bytes(before + json.dumps({"prev_hash": audit._line_hash(last)}).encode() + b"\n")
             self.assertRejected(ap, "G-8", command="apply")
+            self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets))
 
 
 class TestExecution(Base):
@@ -622,9 +632,10 @@ class TestExecution(Base):
     def test_audit_torn_last_line_and_symlink(self):
         audit.ensure_writable()
         audit.log_path().write_bytes(b'{"skill":"ger","comm')  # クラッシュで途中まで書かれた最終行
-        audit.append({"command": "verify", "result": "ok"})
-        lines = audit.log_path().read_bytes().splitlines()
-        self.assertEqual(json.loads(lines[-1])["command"], "verify")
+        with self.assertRaises(audit.BrokenChain):  # R3 F15: 壊れたチェーンの後ろには追記しない
+            audit.append({"command": "verify", "result": "ok"})
+        self.assertEqual(audit.log_path().read_bytes(), b'{"skill":"ger","comm')
+        self.assertEqual(self.ger("verify", self.ger_input())[0], 64)
         other = self.d / "elsewhere"; other.write_text("")
         audit.log_path().unlink(); audit.log_path().symlink_to(other)
         for check in (audit.ensure_writable, lambda: None):  # 事前確認と O_NOFOLLOW の両方で拒否する
@@ -679,6 +690,67 @@ class TestRegressionsR3Fixes(Base):
         p["plan_hash"] = plan_hash(p)
         return p
 
+    # F2: GER_LOG_DIR をシンボリックリンク経由で指定しても、リンクを置いたディレクトリ（字句上の上位）を対象にできない
+    def test_f2_log_dir_symlink_ancestors_protected(self):
+        a, b = self.d / "A", self.d / "B" / "ger"
+        a.mkdir(); b.mkdir(parents=True); os.chmod(b, 0o700); os.chmod(a, 0o755)
+        (a / "logdir").symlink_to(b)
+        os.environ["GER_LOG_DIR"] = str(a / "logdir")
+        err = self.reject_msg(self.ger_input(plan=self.plan([a])), "G-7", "監査ログ")
+        self.assertIn("G-7", err)
+        self.assertEqual(stat.S_IMODE(os.stat(a).st_mode), 0o755)
+        # 起動時に解決した実パスへ書く（リンクを後から差し替えられても別の場所に書かない）
+        self.assertEqual(audit.log_dir(), Path(os.path.realpath(b)))
+        self.assertTrue((b / "ger-audit.jsonl").exists())
+
+    # F3: -o の親がシンボリックリンク経由でも、リンクを置いたディレクトリを計画の対象にできない
+    def test_f3_output_parent_symlink_ancestors_protected(self):
+        a, out = self.d / "A", self.d / "B" / "out"
+        a.mkdir(); out.mkdir(parents=True); os.chmod(a, 0o755)
+        (a / "outdir").symlink_to(out)
+        inp = self.ger_input(plan=self.plan([a]))
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", str(a / "outdir" / "x.json"))
+        self.assertEqual(code, 64, err)
+        self.assertIn("-o の出力先ディレクトリ", err)
+        self.assertEqual(stat.S_IMODE(os.stat(a).st_mode), 0o755)
+
+    # F5: dry-run 記録は 1 回の apply で使い切る（拒否・変更前の引数エラーでは使わない）
+    def test_f5_dry_run_record_consumed_by_apply(self):
+        inp = self.ger_input()
+        code, err = self.dry_then_apply(inp)
+        self.assertEqual(code, 0, err)
+        for t in self.targets:
+            os.chmod(t, 0o644)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        self.reject_msg(ap, "G-8", "dry-run", command="apply")
+        self.assertEqual(self.dry_then_apply(inp)[0], 0)  # 新しい dry-run なら再び実行できる
+        for t in self.targets:
+            os.chmod(t, 0o644)
+        # 引数エラー（変更前に止まった apply）は dry-run を使用済みにしない
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", str(self.targets[0]))
+        self.assertEqual(code, 64, err)
+        self.assertEqual(self.ger("apply", ap)[0], 0)
+
+    # F6: --now 付きの apply は --now 付きの dry-run 記録だけを数える（実時刻の古い記録を --now で期限内に見せない）
+    def test_f6_now_override_apply_counts_only_override_dry_runs(self):
+        now = now_utc()
+        ts = lambda d: fmt_ts(now + dt.timedelta(seconds=d))  # noqa: E731
+        p = self.plan(created_at=ts(-7200))
+        for it in p["items"]:
+            it["decided_at"] = ts(-7200)
+            it["due_at"] = it["due_at"] and ts(86400)
+            it["recheck_at"] = it["recheck_at"] and ts(86400)
+        inp = self.ger_input(plan=self.rehash(p)); inp["approval"]["approved_at"] = ts(-3600)
+        self.assertEqual(self.ger("dry-run", inp, now=None)[0], 0)  # 実時刻の dry-run
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        dry_at = json.loads(audit.log_path().read_text().splitlines()[-1])["finished_at"]
+        self.reject_msg(ap, "G-8", "dry-run", command="apply", now=dry_at)
+        self.assertEqual(self.ger("dry-run", inp, now=dry_at)[0], 0)  # --now 付きの dry-run なら --now 付きの apply に使える
+        self.assertEqual(self.ger("apply", ap, now=dry_at)[0], 0)
+
     # F8: 入力由来の文字列（キー名・対象パス）の制御文字をエスケープして表示する
     def test_f8_control_characters_escaped(self):
         bad = self.ger_input(); bad["x\x1b]0;PWNED\x07\x1b[2J\x9b"] = 1
@@ -695,6 +767,19 @@ class TestRegressionsR3Fixes(Base):
         self.assertEqual(code, 64, err)
         self.assertNotIn("\x1b", err)
         self.assertIn("evil\\x1b[2Jdir", err)
+
+    # F15: ger verify-log
+    def test_f15_verify_log(self):
+        self.assertEqual(self.run_cli("verify-log")[0], 64)
+        for _ in range(3):
+            self.assertEqual(self.ger("verify", self.ger_input())[0], 0)
+        code, err = self.run_cli("verify-log")
+        self.assertEqual(code, 0, err); self.assertIn("3 件", err)
+        lines = audit.log_path().read_text().splitlines()
+        lines[0] = lines[0].replace('"operator":"ops"', '"operator":"evil"')
+        audit.log_path().write_text("\n".join(lines) + "\n")
+        code, err = self.run_cli("verify-log", str(audit.log_path()))
+        self.assertEqual(code, 3, err); self.assertIn("line 2: prev_hash 不一致", err)
 
 
 if __name__ == "__main__":

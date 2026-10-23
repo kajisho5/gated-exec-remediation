@@ -26,27 +26,45 @@ class Prepared:
     before: int
 
 
-def with_ancestors(path) -> tuple[set[str], set[tuple[int, int]]]:
-    """path とその上位ディレクトリすべての (実パスの集合, 存在するものの (st_dev, st_ino) の集合)。"""
+def with_ancestors(*given) -> tuple[set[str], set[tuple[int, int]]]:
+    """given の各パスとその上位ディレクトリすべての (パスの集合, 存在するものの (st_dev, st_ino) の集合)。
+
+    字句上の上位（与えられたパスの途中の要素。シンボリックリンクを含む）と実パスの上位の和集合を返す。
+    実パスの上位だけでは、途中のシンボリックリンクを置いたディレクトリ（A/link → B/dir の A）が漏れ、
+    そこを chmod 0000 されるとそのパス経由で書けなくなる。
+    """
     paths: set[str] = set()
     idents: set[tuple[int, int]] = set()
-    p = os.path.realpath(path)
-    while True:
-        paths.add(p)
-        try:
-            st = os.stat(p)
-            idents.add((st.st_dev, st.st_ino))
-        except OSError:
-            pass
-        parent = os.path.dirname(p)
-        if parent == p:
-            return paths, idents
-        p = parent
+    starts: set[str] = set()
+    for g in given:
+        g = os.fspath(g)
+        g = g if os.path.isabs(g) else os.path.join(os.getcwd(), g)
+        parts = g.split("/")
+        for i in range(1, len(parts) + 1):  # 途中の各要素（../ を畳む前の字句どおり）を、字句上と実パスの両方で
+            pre = "/".join(parts[:i]) or "/"
+            starts.add(os.path.abspath(pre))
+            starts.add(os.path.realpath(pre))
+    for p in starts:
+        while True:
+            if p in paths:
+                break
+            paths.add(p)
+            try:
+                st = os.stat(p)
+                idents.add((st.st_dev, st.st_ino))
+            except OSError:
+                pass
+            parent = os.path.dirname(p)
+            if parent == p:
+                break
+            p = parent
+    return paths, idents
 
 
 def _audit_protected() -> tuple[set[str], set[tuple[int, int]]]:
-    """変更すると GER 自身が監査ログを書けなくなるもの: 監査ログ、そのディレクトリとその上位すべて。"""
-    paths, idents = with_ancestors(audit.log_dir())
+    """変更すると GER 自身が監査ログを書けなくなるもの: 監査ログ、そのディレクトリとその上位すべて
+    （指定された GER_LOG_DIR の字句上の上位と、起動時に解決した実パスの上位の両方）。"""
+    paths, idents = with_ancestors(audit.given_log_dir(), audit.log_dir())
     lp = audit.log_path()
     paths.add(os.path.realpath(lp))
     try:

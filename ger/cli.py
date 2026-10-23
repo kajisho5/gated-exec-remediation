@@ -3,11 +3,12 @@
   ger verify  <ger-input.json> --operator NAME
   ger dry-run <ger-input.json> --operator NAME -o remediation-log.json
   ger apply   <ger-input.json> --operator NAME -o remediation-log.json
+  ger verify-log [LOG]   監査ログのハッシュチェーンを検証する（読むだけ。監査ログには記録しない）
 
 終了コード: 0=成功 / 3=ゲートで拒否（何も変更していない） / 4=失敗しロールバック済み /
            5=ロールバックも失敗、または適用後に remediation-log を書けなかった（要手動対応） /
-           64=引数・環境エラー / 70=内部エラー
-環境変数: GER_LOG_DIR（監査ログ）、GER_DRYRUN_TTL（dry-run 記録の有効秒数、既定 86400）、
+           64=引数・環境エラー / 70=内部エラー（verify-log: 0=健全 / 3=破損 / 64=ログが無い）
+環境変数: GER_LOG_DIR（監査ログ。起動時に実パスへ解決する）、GER_DRYRUN_TTL（dry-run 記録の有効秒数、既定 86400）、
          GER_ALLOW_NOW_OVERRIDE（=1 のときだけ --now を受け付ける。テスト専用）
 """
 from __future__ import annotations
@@ -17,6 +18,8 @@ import os
 import re
 import stat
 import sys
+
+from pathlib import Path
 
 from . import audit, executor
 from .core import Rejection, canonical, fmt_ts, input_hash, load_json, now_utc, plan_hash, sha256, validator, write_atomic
@@ -37,6 +40,8 @@ class _Parser(argparse.ArgumentParser):
 def _parser() -> argparse.ArgumentParser:
     p = _Parser(prog="ger", description="GER — Gated-Exec Remediation（修復層）")
     sub = p.add_subparsers(dest="command", required=True)
+    s = sub.add_parser("verify-log", help="監査ログのハッシュチェーンを検証する")
+    s.add_argument("log", nargs="?", help="検証するログ（既定 $GER_LOG_DIR/ger-audit.jsonl）")
     for name in ("verify", "dry-run", "apply"):
         s = sub.add_parser(name)
         s.add_argument("input")
@@ -57,6 +62,25 @@ def _ttl() -> int:
     if not raw.isdigit() or not 0 < int(raw) <= 7 * 86400:
         raise ValueError("GER_DRYRUN_TTL は 1〜604800 の整数（秒）で指定してください")
     return int(raw)
+
+
+def _verify_log(path: str | None) -> int:
+    p = Path(path) if path else audit.log_path()
+    if not p.exists():
+        _err(f"ger verify-log: 監査ログがありません: {p}")
+        return EXIT_USAGE
+    try:
+        n, problems = audit.scan_chain(p)
+    except OSError as e:
+        _err(f"ger verify-log: 監査ログを読めません（{e}）")
+        return EXIT_USAGE
+    if problems:
+        _err(f"ger verify-log: ハッシュチェーンが壊れています（{len(problems)} 件、全 {n} 行）: {p}")
+        for x in problems:
+            _err(f"  {x}")
+        return EXIT_REJECTED
+    _err(f"ger verify-log: OK（{n} 件、ハッシュチェーンは健全）: {p}")
+    return EXIT_OK
 
 
 def _same_path(a: str, b: str) -> bool:
@@ -121,6 +145,9 @@ def _output_clash(path: str, prepared) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    audit.configure()  # GER_LOG_DIR をここで一度だけ実パスに解決し、以後のログの読み書きはそのパスで行う
+    if args.command == "verify-log":
+        return _verify_log(args.log)
     if not _PERSON.fullmatch(args.operator):
         _err("ger: --operator の形式が不正です")
         return EXIT_USAGE
