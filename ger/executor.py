@@ -32,6 +32,7 @@ def apply(plan: dict, prepared: list[Prepared], clock=now_utc) -> tuple[list[dic
     results: list[dict] = []
     done: list[tuple[Prepared, tuple[int, int, int]]] = []  # (計画, 適用後の実体 ID)
     failure = None
+    outcome = ROLLED_BACK
     for i, p in enumerate(prepared):
         if p.before == p.mode:
             results.append(_result(p.finding_id, p.action_type, p.target, fmt(p.before), fmt(p.mode), "skipped", "already_compliant"))
@@ -39,7 +40,11 @@ def apply(plan: dict, prepared: list[Prepared], clock=now_utc) -> tuple[list[dic
         try:
             new_ident = REGISTRY[p.action_type].set_mode(p.target, p.mode, p.ident)
         except Exception as e:  # 失敗は全件ロールバックの契機
-            results.append(_result(p.finding_id, p.action_type, p.target, fmt(p.before), None, "failed", f"{type(e).__name__}: {e}"))
+            reason = f"{type(e).__name__}: {e}"
+            if getattr(e, "applied", False):  # 変更済みの可能性があり、同一実体と確認できないため戻せない
+                outcome = ROLLBACK_FAILED
+                reason = f"applied_unverified: 変更が適用された可能性がありますが、検証もロールバックもできません（{reason}）"
+            results.append(_result(p.finding_id, p.action_type, p.target, fmt(p.before), None, "failed", reason))
             failure = i
             break
         done.append((p, new_ident))
@@ -48,7 +53,6 @@ def apply(plan: dict, prepared: list[Prepared], clock=now_utc) -> tuple[list[dic
         return results + skipped_decisions(plan), None
     for p in prepared[failure + 1:]:
         results.append(_result(p.finding_id, p.action_type, p.target, fmt(p.before), None, "skipped", "aborted_after_failure"))
-    outcome = ROLLED_BACK
     by_fid = {r["finding_id"]: r for r in results}
     for p, applied_ident in reversed(done):
         r = by_fid[p.finding_id]

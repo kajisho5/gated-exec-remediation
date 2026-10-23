@@ -17,11 +17,15 @@ _MODE = re.compile(r"^0[0-7]{3}$")
 
 
 class ActionError(Exception):
-    pass
+    """applied=True は「権限の変更は既に行われた可能性があり、検証できなかった」ことを示す（ロールバック不能）。"""
+
+    def __init__(self, message: str, applied: bool = False):
+        super().__init__(message)
+        self.applied = applied
 
 
 def parse_params(params: dict) -> int:
-    if set(params) != {"mode"} or not isinstance(params["mode"], str) or not _MODE.match(params["mode"]):
+    if set(params) != {"mode"} or not isinstance(params["mode"], str) or not _MODE.fullmatch(params["mode"]):
         raise ActionError('params は {"mode": "0NNN"}（8 進 3 桁、特殊ビットなし）のみ受け付けます')
     return int(params["mode"], 8)
 
@@ -74,9 +78,13 @@ def set_mode(target: str, mode: int, ident: Ident) -> Ident:
             os.close(fd)
     else:
         os.chmod(target, mode)
-    after = os.lstat(target)
+    # ここから先の失敗は変更済みの可能性がある（applied=True）
+    try:
+        after = os.lstat(target)
+    except OSError as e:
+        raise ActionError(f"適用後に対象を確認できません: {e}", applied=True) from e
     if stat.S_ISLNK(after.st_mode) or (after.st_dev, after.st_ino) != ident[:2]:
-        raise ActionError("適用中に対象が差し替えられました")
+        raise ActionError("適用中に対象が差し替えられました", applied=True)
     if after.st_mode & 0o7777 != mode:
-        raise ActionError(f"適用後の権限が {fmt(after.st_mode)} です（期待値 {fmt(mode)}）")
+        raise ActionError(f"適用後の権限が {fmt(after.st_mode)} です（期待値 {fmt(mode)}）", applied=True)
     return ident_of(after)

@@ -37,6 +37,40 @@ def _ptr(path: list) -> str:
     return "/" + "/".join(str(p) for p in path) if path else "/"
 
 
+_patterns: dict[str, re.Pattern] = {}
+
+
+def _compile(pattern: str) -> re.Pattern:
+    """ECMA 262 の意味で pattern をコンパイルする。
+
+    Python の `$` は末尾の改行の直前にも一致する（"alice\\n" が ^...$ を通る）ため、
+    文字クラス外のエスケープされていない `$` を `\\Z` に置き換える。
+    """
+    c = _patterns.get(pattern)
+    if c is None:
+        out, i, in_class = [], 0, False
+        while i < len(pattern):
+            ch = pattern[i]
+            if ch == "\\":
+                out.append(pattern[i:i + 2])
+                i += 2
+                continue
+            if in_class:
+                in_class = ch != "]"
+            elif ch == "[":
+                in_class = True
+                if pattern[i + 1:i + 2] == "]":  # 先頭の ] はリテラル（Python 解釈に合わせる）
+                    out.append("[]")
+                    i += 2
+                    continue
+            elif ch == "$":
+                ch = r"\Z"
+            out.append(ch)
+            i += 1
+        c = _patterns[pattern] = re.compile("".join(out))
+    return c
+
+
 def _eq(a: Any, b: Any) -> bool:
     # JSON の等価性（bool と数値を区別する）
     if isinstance(a, bool) or isinstance(b, bool):
@@ -104,7 +138,7 @@ class Validator:
         if "enum" in s and not any(_eq(x, e) for e in s["enum"]):
             out.append(f"{_ptr(path)}: must be one of {s['enum']!r}")
         if isinstance(x, str):
-            if "pattern" in s and not re.search(s["pattern"], x):
+            if "pattern" in s and not _compile(s["pattern"]).search(x):
                 out.append(f"{_ptr(path)}: does not match {s['pattern']}")
             if "minLength" in s and len(x) < s["minLength"]:
                 out.append(f"{_ptr(path)}: shorter than {s['minLength']}")

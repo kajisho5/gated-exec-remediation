@@ -98,6 +98,7 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
     # G-7 対象の事前検証（全件）
     prepared: list[Prepared] = []
     seen: set[str] = set()
+    seen_ino: set[tuple[int, int]] = set()
     for it in items:
         a, fid = it["action"], it["finding_id"]
         t = a["target"]
@@ -109,12 +110,15 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
             seen.add(t)
             mode = REGISTRY[a["type"]].parse_params(a["params"])
             st = REGISTRY[a["type"]].inspect(t)
+            if (st.st_dev, st.st_ino) in seen_ino:
+                raise ActionError("同じ実体（ハードリンク）への操作が計画内で重複しています")
+            seen_ino.add((st.st_dev, st.st_ino))
             if os.path.realpath(t) != t:
                 raise ActionError("パスの途中にシンボリックリンクがあります")
             prepared.append(Prepared(fid, a["type"], t, mode, (st.st_dev, st.st_ino, st.st_ctime_ns), st.st_mode & 0o7777))
         except FileNotFoundError:
             rej.append(Rejection("G-7", "対象が存在しません", fid))
-        except (ActionError, OSError) as e:
+        except (ActionError, OSError, ValueError) as e:  # ValueError: パスに NUL 文字など
             rej.append(Rejection("G-7", str(e), fid))
     if rej:
         return rej, []

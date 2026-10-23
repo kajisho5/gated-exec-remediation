@@ -55,6 +55,9 @@ bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode �
 | 64 / 70 | 引数・環境エラー / 内部エラー |
 
 環境変数: `GER_LOG_DIR`（監査ログ、既定 `~/.local/state/ger/`）、`GER_DRYRUN_TTL`（dry-run 記録の有効秒数、既定 86400、最大 604800）。
+`--now`（現在時刻の上書き）はテスト専用で、`GER_ALLOW_NOW_OVERRIDE=1` のときだけ受け付けます（それ以外は終了コード 64）。
+
+`-o` の出力先は変更を始める前に確認します（親ディレクトリが存在し書き込めること、既存のディレクトリでないこと）。remediation-log は監査ログより先に書き出し、書けなかった場合は成功として記録しません（apply で変更が残っている可能性があるときは終了コード 5）。
 
 ## ゲート
 
@@ -66,7 +69,7 @@ bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode �
 | G-4 | `--operator` が承認者に含まれる |
 | G-5 | 操作が allowed_actions に無い、または GER 未対応 |
 | G-6 | reversible / skillpact_effects が無い（ZET 確定済みでない）、reversible が操作の性質と不一致、不可逆操作で承認者 2 名未満 |
-| G-7 | 対象が正規化済みの絶対パスでない・存在しない・シンボリックリンク（途中経路を含む）・通常ファイル/ディレクトリ以外・所有者でない・計画内で重複、chmod の mode が `^0[0-7]{3}$` 以外 |
+| G-7 | 対象が正規化済みの絶対パスでない・存在しない・シンボリックリンク（途中経路を含む）・通常ファイル/ディレクトリ以外・所有者でない・計画内で重複（ハードリンクで同じ実体を指す場合を含む）、chmod の mode が `^0[0-7]{3}$` 以外 |
 | G-8 | apply 時に、同一 plan_hash・同一入力（mode 以外）の dry-run 成功記録が有効期限内に無い、または監査ログのハッシュチェーンが壊れている |
 
 実行中は、事前検証時の実体 ID（`st_dev`・`st_ino`・`st_ctime_ns`）と一致する場合だけ変更します。i-node 番号は削除・再作成で再利用されることがあるため、ctime も含めて同一の実体かを判定しています。
@@ -86,10 +89,10 @@ bin/ger apply   ger-input.apply.json --operator ops -o apply-log.json   # mode �
 ## テスト
 
 ```bash
-tests/run-tests.sh   # 単体テスト（22 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
+tests/run-tests.sh   # 単体テスト（31 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
 ```
 
-root で実行すると「読めないファイル（0000）」のテストは SKIP になります（一般ユーザーでは 22 件すべて実行）。ZET が確定した実際の計画（`tests/fixtures/zet-final-plan.json`）で、スキーマと plan_hash の互換性も確認しています。
+root で実行すると「読めないファイル（0000）」のテストは SKIP になります（一般ユーザーでは 31 件すべて実行）。ZET が確定した実際の計画（`tests/fixtures/zet-final-plan.json`）で、スキーマと plan_hash の互換性も確認しています。
 
 ## ライセンス
 

@@ -12,8 +12,8 @@
       "path": "ger/jsonschema_lite.py",
       "source_repo": "kajisho5/zero-exec-triage",
       "source_path": "zet/jsonschema_lite.py",
-      "source_commit": "5d63b3c06ede4f961ae6d0a17a9115aef19149f1",
-      "sha256": "2430ddb9e7e64f13abb7a0a2a672fbc421b612edad79c18c7fbbe5cb6c3544da"
+      "source_commit": "09e704ddadd8e571ae65052e65dfcacd65ba8b3c",
+      "sha256": "c6d74206f20ca9cf6340913fe7ec532f3e476a042652e7f033e6d607faf0c468"
     }
   ]
 }
