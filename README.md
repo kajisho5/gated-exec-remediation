@@ -97,12 +97,12 @@ During execution, a change is made only if the object's identity matches the one
 ## Tests
 
 ```bash
-tests/run-tests.sh   # 単体テスト（41 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
+tests/run-tests.sh   # 単体テスト（42 件。一時ディレクトリの実ファイルで chmod・ロールバック・差し替え検出を検証）＋ strace による外部プロセスゼロ検証
 ```
 
-This runs the unit tests (41; chmod, rollback and swap detection are verified on real files in a temporary directory) plus strace-based verification that no external process is launched.
+This runs the unit tests (42; chmod, rollback and swap detection are verified on real files in a temporary directory) plus strace-based verification that no external process is launched.
 
-When run as root, the "unreadable file (0000)" test is SKIPped (as a regular user all 41 tests run). Schema and plan_hash compatibility are also checked against an actual plan finalized by ZET (`tests/fixtures/zet-final-plan.json`).
+When run as root, the "unreadable file (0000)" test is SKIPped (as a regular user all 42 tests run). Schema and plan_hash compatibility are also checked against an actual plan finalized by ZET (`tests/fixtures/zet-final-plan.json`).
 
 ## License
 

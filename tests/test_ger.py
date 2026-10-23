@@ -9,6 +9,7 @@ import json
 import os
 import stat
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -223,6 +224,21 @@ class TestGates(Base):
         code, err = self.ger("verify", self.ger_input(plan=p))
         self.assertEqual(code, 3, err)
         self.assertIn("G-1", err); self.assertIn("finding_id が重複", err)
+
+    def test_g1_duplicate_finding_id_check_is_linear(self):
+        # 重複検査が O(n^2)（list.count）だと 20000 件で数秒かかる。スキーマ検証を外し、G-2 で止めて重複検査だけを測る
+        item = self.plan()["items"][0]
+        items = [dict(item, finding_id="sha256:%064x" % i) for i in range(20000)]
+        items.append(dict(item, finding_id="sha256:%064x" % 7))
+        p = {"plan_id": PLAN_ID, "status": "draft", "items": items}
+        inp = {"plan": p, "mode": "dry-run", "approval": {"approved_at": NOW}}
+        p["created_at"] = NOW
+        with mock.patch.object(gates, "_schema", return_value=[]):
+            t0 = time.monotonic()
+            rej, _ = gates.check_gates(inp, "ops", now_utc(NOW), "verify", 86400)
+            elapsed = time.monotonic() - t0
+        self.assertEqual([(r.gate, r.finding_id) for r in rej], [("G-1", "sha256:%064x" % 7)])
+        self.assertLess(elapsed, 1.0)
 
     def test_g1_invalid_calendar_timestamps(self):
         inp = self.ger_input(); inp["approval"]["approved_at"] = "2026-02-30T11:00:00Z"

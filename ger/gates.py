@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+from collections import Counter
 from dataclasses import dataclass
 
 from . import audit
@@ -52,8 +53,8 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
     if bad_ts:
         return bad_ts, []
     # G-1 finding_id の重複（実行結果・ロールバックを item に一意に対応づけられない計画は構造不正）
-    fids = [it["finding_id"] for it in plan["items"] if it["decision"] == "remediate"]
-    dup = sorted({f for f in fids if fids.count(f) > 1})
+    counts = Counter(it["finding_id"] for it in plan["items"] if it["decision"] == "remediate")  # O(n)
+    dup = sorted(f for f, c in counts.items() if c > 1)
     if dup:
         return [Rejection("G-1", "remediate の item で finding_id が重複しています", f) for f in dup], []
 
