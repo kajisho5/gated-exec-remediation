@@ -70,14 +70,22 @@ def append(record: dict) -> dict:
     return rec
 
 
+def _parse(line: bytes) -> dict | None:
+    """1 行を記録として解釈する。UTF-8 でない・JSON でない・object でない行は None（任意のバイト列で例外を出さない）。"""
+    try:
+        rec = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):  # 多バイト文字の途中で切れた行など
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
 def verify_chain(path: Path | None = None) -> list[str]:
     problems: list[str] = []
     prev: bytes | None = None
     for n, line in enumerate(_read_lines(path or log_path()), 1):
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            problems.append(f"line {n}: JSON ではありません")
+        rec = _parse(line)
+        if rec is None:
+            problems.append(f"line {n}: JSON object ではありません")
             prev = line
             continue
         if rec.get("prev_hash") != (None if prev is None else _line_hash(prev)):
@@ -86,11 +94,20 @@ def verify_chain(path: Path | None = None) -> list[str]:
     return problems
 
 
-def find_dry_run(plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds: int) -> dict | None:
-    """同一計画・同一入力の dry-run 成功記録のうち、有効期限内の最新のものを返す。"""
+def find_dry_run(plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds: int,
+                 now_override: bool = False) -> dict | None:
+    """同一計画・同一入力の dry-run 成功記録のうち、有効期限内の最新のものを返す。
+
+    --now（時刻の上書き）で記録した dry-run は、今回も --now を使う場合（now_override）だけ数える。
+    未来の時刻で記録した dry-run が、後で --now なしの本番 apply を通してしまわないため。
+    """
     found = None
     for line in _read_lines(log_path()):
-        rec = json.loads(line)
+        rec = _parse(line)
+        if rec is None:
+            continue
+        if rec.get("now_override", False) is not False and not now_override:
+            continue
         if (rec.get("command") == "dry-run" and rec.get("result") == "ok"
                 and rec.get("plan_hash") == plan_hash and rec.get("input_hash") == input_hash):
             try:

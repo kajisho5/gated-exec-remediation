@@ -7,8 +7,10 @@ import hashlib
 import io
 import json
 import os
+import socket
 import stat
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -16,7 +18,7 @@ from unittest import mock
 
 from ger import audit, cli, executor, gates
 from ger.actions import chmod
-from ger.core import ROOT, canonical, input_hash, now_utc, plan_hash, validator
+from ger.core import ROOT, canonical, fmt_ts, input_hash, now_utc, plan_hash, validator
 
 FIX = ROOT / "tests" / "fixtures"
 PLAN_ID = "11111111-2222-4333-8444-555555555555"
@@ -218,11 +220,36 @@ class TestGates(Base):
         fifo = self.d / "fifo"; os.mkfifo(fifo)
         self.assertRejected(self.ger_input(plan=self.plan([fifo])), "G-7")
 
+    def test_g7_audit_log_and_its_directories_rejected(self):
+        # 監査ログ・そのディレクトリ・その上位ディレクトリを chmod すると、apply 後に記録できなくなる
+        self.assertEqual(self.ger("dry-run", self.ger_input())[0], 0)
+        hl = self.d / "audit-hardlink"; os.link(audit.log_path(), hl)
+        for t in (audit.log_path(), hl, audit.log_dir(), self.d):
+            code, err = self.ger("verify", self.ger_input(plan=self.plan([t])))
+            self.assertEqual(code, 3, (t, err))
+            self.assertIn("G-7", err); self.assertIn("監査ログ", err)
+        self.assertEqual(stat.S_IMODE(os.stat(audit.log_dir()).st_mode), 0o700)
+
     def test_g1_duplicate_finding_id(self):
         p = self.plan(); p["items"][1]["finding_id"] = FID[0]; p["plan_hash"] = plan_hash(p)
         code, err = self.ger("verify", self.ger_input(plan=p))
         self.assertEqual(code, 3, err)
         self.assertIn("G-1", err); self.assertIn("finding_id が重複", err)
+
+    def test_g1_duplicate_finding_id_check_is_linear(self):
+        # 重複検査が O(n^2)（list.count）だと 20000 件で数秒かかる。スキーマ検証を外し、G-2 で止めて重複検査だけを測る
+        item = self.plan()["items"][0]
+        items = [dict(item, finding_id="sha256:%064x" % i) for i in range(20000)]
+        items.append(dict(item, finding_id="sha256:%064x" % 7))
+        p = {"plan_id": PLAN_ID, "status": "draft", "items": items}
+        inp = {"plan": p, "mode": "dry-run", "approval": {"approved_at": NOW}}
+        p["created_at"] = NOW
+        with mock.patch.object(gates, "_schema", return_value=[]):
+            t0 = time.monotonic()
+            rej, _ = gates.check_gates(inp, "ops", now_utc(NOW), "verify", 86400)
+            elapsed = time.monotonic() - t0
+        self.assertEqual([(r.gate, r.finding_id) for r in rej], [("G-1", "sha256:%064x" % 7)])
+        self.assertLess(elapsed, 2.5)  # 修正前は約 5 秒。CI の遅いランナーでも誤検知しない上限
 
     def test_g1_invalid_calendar_timestamps(self):
         inp = self.ger_input(); inp["approval"]["approved_at"] = "2026-02-30T11:00:00Z"
@@ -308,6 +335,31 @@ class TestGates(Base):
         audit.log_path().write_text("\n".join(lines) + "\n")
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
         self.assertRejected(ap, "G-8", command="apply")
+
+    def test_g8_now_override_dry_run_does_not_unlock_real_apply(self):
+        # --now 付きの dry-run は記録に now_override: true を残し、--now なしの apply の根拠にならない
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp, now=fmt_ts(now_utc()))[0], 0)
+        rec = json.loads(audit.log_path().read_text().splitlines()[-1])
+        self.assertIs(rec["now_override"], True)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        self.assertRejected(ap, "G-8", command="apply", now=None)
+        self.assertNotIn("now_override", json.loads(audit.log_path().read_text().splitlines()[-1]))
+        self.assertEqual(self.ger("verify", inp, now=None)[0], 0)
+        self.assertNotIn("now_override", json.loads(audit.log_path().read_text().splitlines()[-1]))
+
+    def test_g8_garbage_audit_log_is_rejected_not_crash(self):
+        # 多バイト文字の途中で切れた最終行・object でない JSON 行・任意のバイト列は G-8 の拒否（70 ではない）
+        inp = self.ger_input()
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        for garbage in ('{"operator":"あ'.encode()[:-1], b"null", b"[1,2]", b'"x"', bytes(range(256))):
+            audit.log_path().unlink(missing_ok=True)
+            self.assertEqual(self.ger("dry-run", inp)[0], 0)
+            with open(audit.log_path(), "ab") as f:
+                f.write(garbage + b"\n")
+            self.assertTrue(audit.verify_chain(), garbage)
+            self.assertIsNotNone(audit.find_dry_run(inp["plan"]["plan_hash"], input_hash(inp), now_utc(NOW), 86400, True))
+            self.assertRejected(ap, "G-8", command="apply")
 
 
 class TestExecution(Base):
@@ -432,6 +484,43 @@ class TestExecution(Base):
             self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), "出力先が不正なのに変更されています")
         self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
 
+    def test_output_empty_or_trailing_slash_rejected_before_changes(self):
+        # abspath は "" を cwd に、末尾の / を落として解釈するため、書けない出力先が事前確認を通っていた
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        existing = self.d / "existing.json"; existing.write_text("old")
+        n = len(audit.log_path().read_text().splitlines())
+        for out in ("", str(self.d / "nd") + "/", str(existing) + "/", str(existing) + "/x", str(self.d / "nd" / "..")):
+            code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", out)
+            self.assertEqual(code, 64, (out, err))
+            self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets), f"出力先が不正なのに変更されています: {out!r}")
+        self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
+        self.assertEqual(existing.read_text(), "old")
+        self.assertFalse((self.d / "nd").exists())
+
+    def test_output_must_be_regular_file_not_symlink(self):
+        # FIFO・ソケット・デバイスやシンボリックリンクを通常ファイルで置き換えない（root で -o /dev/null を壊さない）
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        fifo = self.d / "out.fifo"; os.mkfifo(fifo)
+        sock = self.d / "out.sock"
+        s = socket.socket(socket.AF_UNIX); s.bind(str(sock)); self.addCleanup(s.close)
+        real = self.d / "real.json"; real.write_text("old")
+        link = self.d / "out-link.json"; link.symlink_to(real)
+        dangling = self.d / "dangling.json"; dangling.symlink_to(self.d / "nowhere.json")
+        n = len(audit.log_path().read_text().splitlines())
+        for command, src in (("dry-run", inp), ("apply", ap)):
+            for out in (fifo, sock, link, dangling):
+                code, err = self.run_cli(command, self.write(src), "--operator", "ops", "--now", NOW, "-o", str(out))
+                self.assertEqual(code, 64, (command, out, err))
+        self.assertTrue(stat.S_ISFIFO(os.lstat(fifo).st_mode)); self.assertTrue(stat.S_ISSOCK(os.lstat(sock).st_mode))
+        self.assertTrue(link.is_symlink() and dangling.is_symlink())
+        self.assertEqual(real.read_text(), "old"); self.assertFalse((self.d / "nowhere.json").exists())
+        self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets))
+        self.assertEqual(len(audit.log_path().read_text().splitlines()), n)
+
     def test_output_must_not_be_audit_log_or_input(self):
         inp = self.ger_input()
         self.assertEqual(self.ger("dry-run", inp)[0], 0)
@@ -461,6 +550,36 @@ class TestExecution(Base):
         self.assertTrue(all("計画の対象" in r["error"] for r in recs[1:]))
         self.assertEqual(audit.verify_chain(), [])
 
+    def test_output_parent_directories_must_not_be_plan_targets(self):
+        # -o の親ディレクトリやその上位を chmod すると、apply 後に remediation-log を書けなくなる
+        out = self.d / "out"; sub = out / "sub"; sub.mkdir(parents=True)
+        os.chmod(out, 0o755); os.chmod(sub, 0o755)
+        for t in (sub, out):
+            inp = self.ger_input(plan=self.plan([t]))
+            self.assertEqual(self.ger("dry-run", inp)[0], 0)
+            ap = copy.deepcopy(inp); ap["mode"] = "apply"
+            code, err = self.run_cli("apply", self.write(ap), "--operator", "ops", "--now", NOW, "-o", str(sub / "x.json"))
+            self.assertEqual(code, 64, (t, err))
+            self.assertIn("-o の出力先ディレクトリ", err)
+            self.assertEqual(stat.S_IMODE(os.stat(t).st_mode), 0o755, "対象が変更されています")
+        self.assertFalse((sub / "x.json").exists())
+
+    def test_output_write_failure_after_apply_is_not_rollback_failed(self):
+        # 変更をすべて適用した後に remediation-log を書けなかった場合、ロールバックはしていないので
+        # rollback_failed と記録しない。以前の実行の remediation-log を今回のものと取り違えないよう消す
+        inp = self.ger_input()
+        self.assertEqual(self.ger("dry-run", inp)[0], 0)
+        ap = copy.deepcopy(inp); ap["mode"] = "apply"
+        stale = self.d / "apply-log.json"; stale.write_text('{"stale": true}')
+        with mock.patch.object(cli, "write_atomic", side_effect=OSError("disk full")):
+            code, err = self.ger("apply", ap)
+        self.assertEqual(code, 5, err)
+        self.assertTrue(all(mode_of(t) == 0o600 for t in self.targets))
+        rec = json.loads(audit.log_path().read_text().splitlines()[-1])
+        self.assertEqual(rec["result"], "applied_unlogged")
+        self.assertNotIn("output_hash", rec)
+        self.assertFalse(stale.exists(), "以前の remediation-log が残っています")
+
     def test_output_write_failure(self):
         inp = self.ger_input()
         ap = copy.deepcopy(inp); ap["mode"] = "apply"
@@ -475,7 +594,7 @@ class TestExecution(Base):
         self.assertEqual(code, 5, err)
         self.assertIn("手動で対応", err)
         recs = [json.loads(line) for line in audit.log_path().read_text().splitlines()]
-        self.assertEqual([r["result"] for r in recs], ["error", "rejected", "ok", "rollback_failed"])
+        self.assertEqual([r["result"] for r in recs], ["error", "rejected", "ok", "applied_unlogged"])
         self.assertNotIn("output_hash", recs[0]); self.assertNotIn("output_hash", recs[-1])
 
     def test_now_override_requires_env(self):
