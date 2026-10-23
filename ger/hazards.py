@@ -11,11 +11,27 @@ from __future__ import annotations
 import posixpath
 import re
 
-HAZARD_VERSION = "ger-hazards-1"
+HAZARD_VERSION = "ger-hazards-2"
 
-# --- 危険なコマンドの判定（ZES §17 と同じ正規表現。zes-scan.sh check_s17） -------------------------
+# --- 危険なコマンドの判定 ------------------------------------------------------------------------
+# エージェントフック（.claude/settings.json の hooks）用。
 DANGEROUS_CMD = re.compile(
     r'(^|[\s"/])(curl|wget)([\s"]|$)|bash -c|sh -c|powershell(\.exe)? .*-(e|enc|encodedcommand)\s|node -e|python[0-9.]* -c|base64')
+# MCP サーバーの command + args 用。ZES §17 の MCP_DANGER_RE（zes-scan.sh。大文字小文字を区別しない）を写したもの。
+#   ZES が HIGH とするのに GER が一致しないと、取り除く対象が見つからず自動の修復ができない（両者を揃えること）
+_MCP_OPTS = r'(\s+-\S*)*\s+'
+MCP_DANGER = re.compile(
+    r'(^|[\s"/])(curl|wget)([\s"]|$)|base64'
+    r'|(^|[\s"/])(ba|z|da|k|a|fi)?sh(\.exe)?' + _MCP_OPTS + r'-[a-z]*c[a-z]*(\s|$)'
+    r'|(^|[\s"/])(node|nodejs|bun)(\.exe)?' + _MCP_OPTS + r'(-e|--eval|-p|--print)([\s=]|$)'
+    r'|(^|[\s"/])deno(\.exe)?\s+eval(\s|$)'
+    r'|(^|[\s"/])python[0-9.]*(\.exe)?' + _MCP_OPTS + r'-[a-z]*c(\s|$)'
+    r'|(^|[\s"/])(perl|ruby)[0-9.]*(\.exe)?' + _MCP_OPTS + r'-[a-z]*e(\s|$)'
+    r'|(^|[\s"/])php[0-9.]*(\.exe)?' + _MCP_OPTS + r'-r(\s|$)'
+    r'|(^|[\s"/])(osascript|lua[0-9.]*)' + _MCP_OPTS + r'-e(\s|$)'
+    r'|(^|[\s"/])(pwsh|powershell)(\.exe)?(\s+\S+)*\s+[-/](c|command|e|ec|enc|encodedcommand)(\s|$)'
+    r'|(^|[\s"/])cmd(\.exe)?\s+/[ck](\s|$)',
+    re.IGNORECASE)
 # フックが作業ツリー内のスクリプトを実行する（node .claude/setup.mjs など）
 LOCAL_SCRIPT = re.compile(r'^\s*(node|deno|bun|python[0-9.]*|bash|sh|zsh|ruby|perl)\s+\.{0,2}/?[\w.@-]+(/[\w.@-]+)*\s*$')
 
@@ -34,7 +50,8 @@ def mcp_cmdline(server) -> str | None:
 
 def dangerous_server(server) -> bool:
     c = mcp_cmdline(server)
-    return c is not None and bool(DANGEROUS_CMD.search(c))
+    # ZES と同じく、command の改行で分けた行ごとに照合する
+    return c is not None and any(MCP_DANGER.search(line) for line in c.split("\n"))
 
 
 def _commands(obj):
