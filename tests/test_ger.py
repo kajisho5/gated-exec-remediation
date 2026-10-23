@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import io
 import json
@@ -13,9 +14,9 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from ger import audit, cli
+from ger import audit, cli, executor, gates
 from ger.actions import chmod
-from ger.core import ROOT, canonical, plan_hash, validator
+from ger.core import ROOT, canonical, now_utc, plan_hash, validator
 
 FIX = ROOT / "tests" / "fixtures"
 PLAN_ID = "11111111-2222-4333-8444-555555555555"
@@ -207,6 +208,12 @@ class TestGates(Base):
         fifo = self.d / "fifo"; os.mkfifo(fifo)
         self.assertRejected(self.ger_input(plan=self.plan([fifo])), "G-7")
 
+    def test_g1_duplicate_finding_id(self):
+        p = self.plan(); p["items"][1]["finding_id"] = FID[0]; p["plan_hash"] = plan_hash(p)
+        code, err = self.ger("verify", self.ger_input(plan=p))
+        self.assertEqual(code, 3, err)
+        self.assertIn("G-1", err); self.assertIn("finding_id が重複", err)
+
     def test_g7_nul_byte_in_target(self):
         self.assertRejected(self.ger_input(plan=self.plan([str(self.targets[0]) + "\x00x"])), "G-7")
 
@@ -314,6 +321,26 @@ class TestExecution(Base):
         results = {r["finding_id"]: r["result"] for r in self.log("apply")["results"]}
         self.assertEqual([results[f] for f in FID[:3]], ["rolled_back", "rolled_back", "failed"])
         self.assertEqual(self.log("apply")["status"], "error")
+
+    def test_rollback_tracks_items_by_position_not_finding_id(self):
+        # 同じ finding_id の item があっても、ロールバック結果を別の item に書き込まないこと
+        rej, prepared = gates.check_gates(self.ger_input(mode="apply"), "ops", now_utc(NOW), "verify", 86400)
+        self.assertEqual(rej, [])
+        prepared = [dataclasses.replace(p, finding_id=FID[0] if i != 1 else FID[1]) for i, p in enumerate(prepared)]
+        real, calls = chmod.set_mode, {"n": 0}
+
+        def flaky(target, mode, ident):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("injected failure")
+            return real(target, mode, ident)
+        with mock.patch.object(chmod, "set_mode", flaky):
+            results, outcome = executor.apply(self.plan(), prepared)
+        self.assertEqual(outcome, executor.ROLLED_BACK)
+        self.assertEqual([(r["result"], r["reason"]) for r in results[:3]],
+                         [("rolled_back", "rolled_back_after_failure"), ("failed", "OSError: injected failure"),
+                          ("skipped", "aborted_after_failure")])
+        self.assertTrue(all(mode_of(t) == 0o644 for t in self.targets))
 
     def test_swapped_target_detected(self):
         inp = self.ger_input()
