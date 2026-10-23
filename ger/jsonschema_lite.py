@@ -1,7 +1,7 @@
 """JSON Schema（2020-12）のサブセット検証器。標準ライブラリのみ。
 
 ZET / GER が使うキーワードだけを実装する:
-  type, const, enum, pattern, minLength, minimum, maximum, minItems, uniqueItems,
+  type, const, enum, pattern, minLength, maxLength, minimum, maximum, minItems, maxItems, uniqueItems,
   required, properties, additionalProperties(false/スキーマ), items, $ref(#/$defs/...),
   if/then/else, not, anyOf, oneOf, allOf
 未対応のキーワードがスキーマに現れたら例外にする（黙って通さない）。
@@ -14,7 +14,8 @@ from typing import Any
 
 _SUPPORTED = {
     "$schema", "$id", "$defs", "$comment", "title", "description", "default", "examples",
-    "type", "const", "enum", "pattern", "minLength", "minimum", "maximum", "minItems", "uniqueItems",
+    "type", "const", "enum", "pattern", "minLength", "maxLength", "minimum", "maximum", "minItems", "maxItems",
+    "uniqueItems",
     "required", "properties", "additionalProperties", "items", "$ref", "if", "then", "else", "not",
     "anyOf", "oneOf", "allOf",
 }
@@ -159,6 +160,8 @@ class Validator:
                 out.append(f"{_ptr(path)}: does not match {s['pattern']}")
             if "minLength" in s and len(x) < s["minLength"]:
                 out.append(f"{_ptr(path)}: shorter than {s['minLength']}")
+            if "maxLength" in s and len(x) > s["maxLength"]:
+                out.append(f"{_ptr(path)}: longer than {s['maxLength']}")
         if _TYPES["number"](x):
             if "minimum" in s and x < s["minimum"]:
                 out.append(f"{_ptr(path)}: below minimum {s['minimum']}")
@@ -167,6 +170,8 @@ class Validator:
         if isinstance(x, list):
             if "minItems" in s and len(x) < s["minItems"]:
                 out.append(f"{_ptr(path)}: fewer than {s['minItems']} items")
+            if "maxItems" in s and len(x) > s["maxItems"]:
+                out.append(f"{_ptr(path)}: more than {s['maxItems']} items")
             if s.get("uniqueItems"):
                 seen: list = []
                 for item in x:

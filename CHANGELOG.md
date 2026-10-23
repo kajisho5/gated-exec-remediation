@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### 修復能力の拡張 Phase 1（設計 0.2。Q-1〜Q-6 を推奨どおり採用）
+
+- **新しい操作**: `quarantine`（ファイル・ツリー・シンボリックリンクを隔離ストアへ rename で移す。関係 self / npm_pkg_dir / npm_installed / pypi_record / ext_dir / skill_dir）、`edit_json`（JSON / JSONC。書式とコメントを保つ）、`edit_toml`（Phase 1 の範囲: 標準のテーブルヘッダの `[mcp_servers.<name>]`）、`remove_line`、`disable_mcp_server`（preset）、`checklist`（ファイルを変えない。結果は `pending_manual`）。`chmod` は従来どおり。ファイルを削除する操作は無い
+- **新しいコマンド**: `ger preview`（下書きの params を現在の内容から埋める。変更しない）、`ger restore`（計画の外。承認者 2 名・dry-run 必須）、`ger confirm`（checklist / followup の手順の記録）、`ger recover`（ジャーナルからの巻き戻し）、`ger quarantine-list`
+- **定義 T（絞るだけ）の一般化**（G-10）: 取り除けるのは GER の危険パターンの閉じた表 H（`ger/hazards.py`）に一致する単位だけで、GER が現在の内容に対して評価する。足せるのは定数表 K の値だけ。変更後をパースし直して「変更前 − 取り除いた単位」と一致することを確かめる（T-3）。dist-info だけ・manifest.json だけのような見かけだけの修復は拒否（Q-6）
+- **範囲と関係**（G-9）: `plan.scope`（承認された検査範囲）の外・保護対象（`/`、システムのディレクトリ、`$HOME` そのもの、GER のインストール先、Python の標準ライブラリ、監査ログ・隔離ストアとその上位。`/etc` は許可リストだけ）を拒否。relation を GER がファイルシステムから導き直す
+- **対象の解決**: `/` から 1 要素ずつ `O_PATH|O_NOFOLLOW|O_DIRECTORY` でたどり、親ディレクトリの fd を apply まで保持する。同一性 `(st_dev, st_ino, st_ctime_ns)` を適用の直前に照合する
+- **dry-run の結果を apply に縛る**: 編集は `expected_after_sha256`、隔離は `sha256` / `tree_sha256`（ツリーハッシュ ger-tree-v1）/ `link_target` を計画に持ち、承認者は変更後の正確なバイト列を承認する。適用後に照合する（V）
+- **隔離ストア**（Q-2）: `~/.local/state/ger/quarantine`（`GER_QUARANTINE_DIR` で変更可）、0700、マーカー `.ger-quarantine-store`、マニフェスト（0600）、移した後はファイル 0400・ディレクトリ 0500。別のデバイスにある対象は拒否。GER は何も削除しない
+- **group**: 同じファイルへの複数の finding を `action.group` で 1 つのトランザクション（書き込み 1 回）にまとめる。実行順は 編集 → quarantine → chmod → checklist
+- **承認者の人数**（Q-3）: restore・root が必要な対象・不可逆・破壊的な操作は 2 名（plan 1.1 では item の approved_by にも 2 名）
+- **ジャーナル**: quarantine と編集の各段階を fsync 付きでジャーナルに書く。ロールバックに失敗した実行・途中で落ちた実行は `ger recover` で巻き戻す
+- **remediation-log 1.1**: `result` に `pending_manual`・`confirmed`、results に `group`・`quarantine_ids`・`followup`、mode に restore 系と `recover`。監査ログの apply の記録に item ごとのハッシュ・隔離 ID・マニフェストのハッシュ（内容・diff は残さない）
+- **スキーマ**: `schemas/actions.schema.json`（GER 所有。ZET が写す）、`schemas/restore-request.schema.json` を追加。`schemas/vendor/remediation-plan.schema.json` を ZET の plan 1.1（relation / finding_path / group / evidence / followup / scope、checklist の target null）に更新。`ger/jsonschema_lite.py` を ZET の版（maxLength / maxItems）に更新
+- **テスト**: 操作ごとのフィクスチャ（合格・拒否）、途中の失敗からのロールバック、ロールバックの失敗と recover、途中で落ちた実行と recover、restore の往復、改ざん（再ハッシュした計画・隔離ストア）と TOCTOU（差し替え・途中のシンボリックリンク）、ツリーハッシュのテストベクタ。strace の検証を全コマンド・全操作種別に広げ、ネットワークのシステムコールが 0 件であることも確かめる（`tests/zero_exec.py`）。E2E（`tests/run-e2e.sh`、ZES が無ければ SKIP）
+- **findings 1.1 への依存**: ZES の findings 1.1（kind / subject / locators / related / evidence / scan_roots）は未実装。Phase 1 は findings 1.0 の `path` と `module` と GER 自身の導き直しで動く（ZET が 1.1 の項目を任意で受け付ける）
+
 ### round 3 の修正
 
 - **承認トークンの限界を明記し、plan だけで評価できる ZET の不変条件を再検査**（F1）: `approval_token` = `plan_hash` は完全性しか示さず、finalize 後に書き換えて再ハッシュした plan は暗号的には検出できない（承認者の署名は将来の課題）。G-1 で I-1 / I-3 / I-4（action の形・対象パスの形）/ I-5 / I-6 / I-7（`items[].skillpact` に対して）/ I-9（日付の前後関係）/ I-11 / I-12 を再検査する

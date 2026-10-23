@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kajisho5/gated-exec-remediation/schemas/restore-request.schema.json",
+  "title": "GER restore-request.json",
+  "description": "ger restore の入力。隔離ストアのエントリ（ger quarantine-list --json で一覧できる）を元の場所へ戻す。approval_token は approval と mode を除いた正規化 JSON の SHA-256。承認者は 2 名以上。dry-run の成功記録が必要で、1 回の apply で使い切る。未知フィールドは拒否（strict）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "restore_id", "created_at", "mode", "entries", "approval"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "restore_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "created_at": { "$ref": "#/$defs/ts" },
+    "mode": { "enum": ["dry-run", "apply"] },
+    "reason": { "type": "string", "maxLength": 2000, "description": "戻す理由（誤検知だった、など）" },
+    "entries": {
+      "type": "array", "minItems": 1, "maxItems": 512,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["quarantine_id", "manifest_sha256"],
+        "properties": {
+          "quarantine_id": { "type": "string", "pattern": "^[0-9A-Za-z-]{1,64}/[0-9]{3,6}$" },
+          "manifest_sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "approval": {
+      "type": "object", "additionalProperties": false,
+      "required": ["restore_id", "approved_by", "approved_at", "approval_token"],
+      "properties": {
+        "restore_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+        "approved_by": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$" } },
+        "approved_at": { "$ref": "#/$defs/ts" },
+        "approval_token": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    }
+  },
+  "$defs": {
+    "ts": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" }
+  }
+}
