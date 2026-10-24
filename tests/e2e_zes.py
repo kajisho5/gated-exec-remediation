@@ -18,8 +18,9 @@ Steps per fixture (design doc §7.7):
   7. ger restore (every entry of this fixture's quarantine store; dry-run -> apply) -> rescan with zes-scan.sh
 Pass conditions:
   - the set of findings of the rescan (multiset of level / module / campaign / fixture-relative path) equals exactly
-    the set of the plan's checklist / defer / exception items and held
-    (a fixture with only auto items ends with 0 findings)
+    the set of the plan's checklist / defer / exception items and held, except those whose path is inside a target
+    that an applied quarantine moved away (a fixture with only auto items ends with 0 findings). So the expected set
+    does not depend on the age of the fixture files (findings such as s35.mtime_before_birth come and go with it)
   - the rescan after restore equals the first scan (ids match too)
 """
 from __future__ import annotations
@@ -144,8 +145,24 @@ def decide(draft: dict, use_checklist: set, created: str) -> dict:
     return plan
 
 
-def classify_expected(final: dict, findings: dict) -> collections.Counter:
+def quarantined_targets(final: dict, log: dict) -> list[str]:
+    """The targets that apply moved into the quarantine store (quarantine items whose result is applied)."""
+    applied = {r["finding_id"] for r in log["results"] if r["result"] == "applied" and r["action_type"] == "quarantine"}
+    return sorted({it["action"]["target"] for it in final["items"] if it["finding_id"] in applied
+                   and it["action"] and it["action"]["type"] == "quarantine" and it["action"]["target"]})
+
+
+def inside(path, targets) -> bool:
+    return isinstance(path, str) and any(path == t or path.startswith(t.rstrip("/") + "/") for t in targets)
+
+
+def classify_expected(final: dict, findings: dict, log: dict | None = None) -> collections.Counter:
+    """The findings expected after apply: those of the plan's checklist / defer / exception items and held, except the
+    ones whose path is inside a target that an applied quarantine moved away (they cannot be reported there any more,
+    whatever they are). Without this, the expected set depended on findings that only some copies of the fixtures have
+    (s35.mtime_before_birth appears once a checkout is older than a day, because the copy keeps the mtimes)."""
     by = {f["id"]: f for f in findings["findings"]}
+    gone = quarantined_targets(final, log) if log is not None else []
     out = collections.Counter()
     for it in final["items"]:
         a = it["action"]
@@ -154,7 +171,7 @@ def classify_expected(final: dict, findings: dict) -> collections.Counter:
     for h in final["held"]:
         if h["finding_id"]:
             out[h["finding_id"]] += 1
-    return collections.Counter({fid: n for fid, n in out.items() if fid in by})
+    return collections.Counter({fid: n for fid, n in out.items() if fid in by and not inside(by[fid]["path"], gone)})
 
 
 def run_fixture(name, zes, zet, work) -> dict:
@@ -214,7 +231,7 @@ def run_fixture(name, zes, zet, work) -> dict:
         res["followup_items"] = sum(1 for r in log["results"] if r.get("followup"))
         f2 = fx.scan("findings-2.json")
         res["after"] = len(f2["findings"])
-        want = collections.Counter(fx.key(by1[fid]) for fid, n in classify_expected(final, f1).items() for _ in range(n))
+        want = collections.Counter(fx.key(by1[fid]) for fid, n in classify_expected(final, f1, log).items() for _ in range(n))
         got = collections.Counter(fx.key(f) for f in f2["findings"])
         res["after_matches_plan"] = want == got
         if want != got:
