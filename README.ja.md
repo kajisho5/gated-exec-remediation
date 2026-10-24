@@ -135,7 +135,7 @@ Phase 1 の流れ: `zet draft`（finding ごとに自動の操作とチェック
 | G-7 | 対象が正規化済みの絶対パスでない・存在しない・途中の要素がシンボリックリンクやディレクトリ以外（GER は `/` から 1 要素ずつ `O_PATH\|O_NOFOLLOW\|O_DIRECTORY` でたどり、親の fd を apply まで保持する）・`ger preview` が見たものと違う（`sha256` / `tree_sha256` / `link_target` / `file_sha256` / `before_sha256`、または計算し直した結果が `expected_after_sha256` と違う）・group の外で他の item の対象と重なる・隔離ストアと別のデバイス・ファイルを期待する所でシンボリックリンク・通常ファイル/ディレクトリ以外・所有者でない・監査ログ／監査ログのディレクトリ／それらの上位ディレクトリ（指定された `GER_LOG_DIR` の字句上の上位（途中のシンボリックリンクを置いたディレクトリを含む）と実パスの上位の両方。変更すると GER が記録できなくなる）・計画内で重複（ハードリンクで同じ実体を指す場合を含む）、chmod の mode が `^0[0-7]{3}$` 以外・world-writable・対象の現在の mode に無い権限ビットを足す（修復は権限を絞るだけ）、`action.evidence_hash` があり現在のファイルと一致しない（ZES と同じ規則で計算: 100MB 以下の通常ファイルは内容の SHA-256、100MB 超は `path\|size\|mtime` の SHA-256。ディレクトリは ZES が finding の detail をハッシュするため比べない） |
 | G-9 | 範囲と関係: chmod 以外のファイルを変える操作で `plan.scope` が無い、対象が `scope.roots` / `scope.home` の外、隔離ストアが scope のルート・site-packages・node_modules・`PATH` のディレクトリの下、保護対象（`/` とトップレベルのシステムディレクトリ、`$HOME` そのもの、GER のインストール先、Python の標準ライブラリ、監査ログ、隔離ストア、それらの上位。`/etc` の下は `ld.so.preload`・`hosts`・`cron.d/*` だけ）、root が必要な対象で承認者が 2 名未満・root が必要な対象とそうでない対象が同じ計画にある、`relation` が字句上・ファイルシステム上で成り立たない |
 | G-10 | 定義 T: 取り除く単位が GER の危険パターンの表 H に無い（T-1）、足す値が定数表 K に無い（T-2）、パースし直した結果が「変更前 − 取り除いた単位」と違う（T-3）、ZES が検知するメタデータだけを取り除きコードを残す（Q-6） |
-| G-8 | apply 時に、同一 plan_hash・同一入力（mode 以外）・同じ `--now` の扱いの、未使用の dry-run 成功記録が有効期限内に無い、または監査ログのハッシュチェーンが壊れている（UTF-8 の JSON object として読めない行も壊れているとみなす）。dry-run 記録は、その後に同じ計画・同じ入力で実行まで進んだ apply（result が `ok` / `rolled_back` / `rollback_failed` / `applied_unlogged`）で使用済みになる。拒否や変更前の引数エラーでは使用済みにならない |
+| G-8 | apply 時に、同一 plan_hash・同一入力（mode 以外）・同じ `--now` の扱いの、未使用の dry-run 成功記録が有効期限内に無い、または監査ログのハッシュチェーンが壊れている（UTF-8 の JSON object として読めない行も壊れているとみなす）。dry-run 記録は、その後に同じ計画・同じ入力で実行まで進んだ apply で使用済みになる（apply は最初の変更の前に開始の記録 `result: "started"` を追記するため、強制終了された apply でも使用済み）。拒否や変更前の引数エラーでは使用済みにならない。verify / dry-run / apply 時に、隔離ストアに未完了のジャーナル（強制終了された apply、ロールバックに失敗した apply）がある場合も拒否する（先にその計画の入力で `ger recover` を実行する）。`ger recover` は後の apply・restore が上書きしたジャーナルを再生せず、すべてのステップを正確に元に戻せるときだけ元に戻す（[設計 §3.1](docs/design/design.ja.md)） |
 
 実行中は、事前検証時の実体 ID（`st_dev`・`st_ino`・`st_ctime_ns`）と一致する場合だけ変更します。i-node 番号は削除・再作成で再利用されることがあるため、ctime も含めて同一の実体かを判定しています。
 
@@ -160,7 +160,7 @@ tests/run-tests.sh   # 単体テスト＋ strace による外部プロセス・�
 ZES_HOME=/path/to/zero-exec-shield ZET_HOME=/path/to/zero-exec-triage tests/run-e2e.sh   # E2E（ZES が無ければ SKIP）
 ```
 
-`run-tests.sh` は単体テスト（一時ディレクトリの実ファイルで全操作の合格・拒否、途中の失敗からの全件ロールバック、ロールバックの失敗と `ger recover`、途中で落ちた実行と `ger recover`、restore の往復、承認後に書き換えて再ハッシュした計画、差し替えられた対象と途中のシンボリックリンク、改ざんされた隔離ストア、`ger-tree-v1` のテストベクタ）と、全操作種別を含む計画で全コマンドを strace で実行し、bash / python3 以外の `execve` とネットワークのシステムコールが無いことの確認を行います。
+`run-tests.sh` は単体テスト（一時ディレクトリの実ファイルで全操作の合格・拒否、途中の失敗からの全件ロールバック、ロールバックの失敗と `ger recover`、途中で落ちた実行と `ger recover`、apply の変更のたびに SIGKILL して再実行が拒否されることと `ger recover`、restore の往復、承認後に書き換えて再ハッシュした計画、差し替えられた対象と途中のシンボリックリンク、改ざんされた隔離ストア、`ger-tree-v1` のテストベクタ）と、全操作種別を含む計画で全コマンドを strace で実行し、bash / python3 以外の `execve` とネットワークのシステムコールが無いことの確認を行います。
 
 root で実行すると「読めないファイル」のテストは SKIP になります（一般ユーザーでは実行されます）。ZET が確定した実際の計画で、スキーマと plan_hash の互換性も確認しています（`tests/fixtures/zet-final-plan.json` は round 3 より前の ZET の出力で新しい任意フィールドを持たない。`tests/fixtures/zet-final-plan-r3.json` は `items[].skillpact` と `action.evidence_hash` を持ち、GER が G-1 で再検査する ZET の不変条件にも合格すること。`tests/fixtures/zet-final-plan-11.json` は chaindrop の E2E で作った ZET 0.2 の plan 1.1 で、group・followup・チェックリストと `ger preview` が埋めた params を持つ）。
 

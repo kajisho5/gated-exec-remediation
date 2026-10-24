@@ -205,11 +205,11 @@ class Journal:
             pass
 
 
-TERMINAL = ("commit", "rolled_back", "recovered", "dry_run")
+TERMINAL = ("commit", "rolled_back", "recovered", "superseded", "dry_run")
 
 
 def open_journals() -> list[tuple[str, list[dict]]]:
-    """Journals without a final record (commit / rolled_back / recovered)."""
+    """Journals without a final record (commit / rolled_back / recovered / superseded)."""
     out = []
     jd = os.path.join(store_dir(), "journal")
     if not os.path.isdir(jd):

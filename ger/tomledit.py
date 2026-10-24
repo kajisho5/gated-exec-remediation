@@ -236,9 +236,12 @@ def _plain(v):
     return v
 
 
+BOM = "\ufeff"
+
+
 def loads(text: str):
     try:
-        return tomllib.loads(text[1:] if text.startswith("﻿") else text)
+        return tomllib.loads(text[1:] if text.startswith(BOM) else text)
     except tomllib.TOMLDecodeError as e:
         raise TomlEditError(f"cannot parse as TOML: {e}") from None
 
@@ -248,7 +251,13 @@ def plain(v):
 
 
 def remove_tables(text: str, key_paths: list[tuple]) -> tuple[str, object]:
-    """Returns the text with each table of key_paths removed and the expected value. TomlEditError if a range cannot be determined uniquely."""
+    """Returns the text with each table of key_paths removed and the expected value. TomlEditError if a range cannot be determined uniquely.
+
+    A UTF-8 byte order mark is kept as it is and the rest is edited (Codex reads the file with the toml crate, whose
+    lexer skips a leading BOM; tomllib does not, so loads strips it)."""
+    if text.startswith(BOM):
+        out, expected = remove_tables(text[1:], key_paths)
+        return BOM + out, expected
     before = loads(text)
     headers, assigns = scan(text)
     remove_idx: set[int] = set()

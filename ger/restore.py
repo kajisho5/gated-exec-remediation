@@ -204,7 +204,11 @@ def prepare(req: dict) -> tuple[list[RestoreStep], list[Rejection]]:
             rej.append(Rejection("G-7", f"entry {qid} not found in the quarantine store"))
         except (ActionError, fsutil.FsError, store.StoreError, OSError, ValueError, KeyError) as ex:
             msg = str(ex)
-            rej.append(Rejection("G-9" if msg.startswith("G-9:") else "G-7", f"{qid}: {msg}"))
+            # As in gates.py: only a fixed prefix decides the gate, and the message is recorded without it
+            if msg.startswith("G-9:"):
+                rej.append(Rejection("G-9", f"{qid}: {msg[5:]}"))
+            else:
+                rej.append(Rejection("G-7", f"{qid}: {msg}"))
     paths = [s.target for s in steps]
     if len(set(paths)) != len(paths):
         rej.append(Rejection("G-7", "several entries restore to the same original path (use separate restores)"))

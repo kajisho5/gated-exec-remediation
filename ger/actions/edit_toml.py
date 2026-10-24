@@ -86,10 +86,14 @@ def preview_compute(ctx, items):
     except tomledit.TomlEditError as e:
         raise ActionError(str(e)) from None
     kps = []
+    servers = doc.get("mcp_servers", {})
     for it in items:
         p = it.action["params"]
         if "select" in p:
-            for name, v in (doc.get("mcp_servers") or {}).items():
+            if not isinstance(servers, dict):  # [[mcp_servers]] (array of tables) or a plain value: not a table of servers
+                raise ActionError(f"mcp_servers is {'an array' if isinstance(servers, list) else 'a value'}, not a table of "
+                                  "[mcp_servers.<name>] tables: nothing GER can remove automatically (fix it by hand)")
+            for name, v in servers.items():
                 if isinstance(v, dict) and hz.dangerous_server(v, toml=True):
                     kps.append(["mcp_servers", name])
         else:

@@ -20,6 +20,8 @@ from .core import VERSION, parse_ts
 _configured: dict[str, str] = {}
 # Audit log results that show an apply got as far as changing targets (they mark the dry-run record as used)
 EXECUTED_RESULTS = ("ok", "rolled_back", "rollback_failed", "applied_unlogged")
+# result of the record an apply appends before its first change (it uses up the dry-run record even if the process is killed)
+STARTED = "started"
 
 
 def _given_dir() -> str:
@@ -117,7 +119,12 @@ def _read_lines(p: Path) -> list[bytes]:
         return [raw.rstrip(b"\n") for raw in f if raw.strip()]
 
 
-def append(record: dict) -> dict:
+class NoDryRun(Exception):
+    """consume_dry_run: no unused dry-run record (checked again under the lock)."""
+
+
+def append(record: dict, guard=None) -> dict:
+    """Appends one record. guard(lines) runs under the lock on the current lines and may raise to append nothing."""
     ensure_writable()
     p = log_path()
     fd = os.open(p, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)  # Symbolic links are rejected
@@ -128,6 +135,8 @@ def append(record: dict) -> dict:
             raw_lines = list(f)
             _check_tail(raw_lines, p)  # Check again under the lock (never append after a broken end or a cut-off line)
             lines = [raw.rstrip(b"\n") for raw in raw_lines if raw.strip()]
+            if guard is not None:
+                guard(lines)
             rec = {"skill": "ger", "version": VERSION, **record,
                    "prev_hash": _line_hash(lines[-1]) if lines else None}
             line = json.dumps(rec, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -182,18 +191,23 @@ def find_dry_run(plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds:
 
     - Only records with the same time handling count: an apply without --now uses only dry-runs without --now,
       an apply with --now only dry-runs with --now (an old real-time record cannot be made to look unexpired with --now)
-    - A dry-run record is used up by one apply: if an apply of the same plan and input ran after that dry-run
-      (result ok / rolled_back / rollback_failed / applied_unlogged), that dry-run no longer counts.
+    - A dry-run record is used up by one apply: if an apply of the same plan and input started after that dry-run
+      (its start record, result started, is appended before the first change; or a final result ok / rolled_back /
+      rollback_failed / applied_unlogged), that dry-run no longer counts. A killed apply has used it up too.
       A rejection at a gate (rejected) and an argument error before any change (error) do not count as use
     """
+    return _find_dry_run(_read_lines(log_path()), plan_hash, input_hash, now, ttl_seconds, now_override, dry_cmd, apply_cmd)
+
+
+def _find_dry_run(lines, plan_hash, input_hash, now, ttl_seconds, now_override, dry_cmd, apply_cmd):
     found = None
-    for line in _read_lines(log_path()):
+    for line in lines:
         rec = _parse(line)
         if rec is None or rec.get("plan_hash") != plan_hash or rec.get("input_hash") != input_hash:
             continue
         if (rec.get("now_override", False) is not False) != now_override:
             continue
-        if rec.get("command") == apply_cmd and rec.get("result") in EXECUTED_RESULTS:
+        if rec.get("command") == apply_cmd and rec.get("result") in EXECUTED_RESULTS + (STARTED,):
             found = None  # Earlier dry-runs are used up
             continue
         if rec.get("command") == dry_cmd and rec.get("result") == "ok":
@@ -204,6 +218,18 @@ def find_dry_run(plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds:
             if 0 <= age <= ttl_seconds:
                 found = rec
     return found
+
+
+def consume_dry_run(record: dict, plan_hash: str, input_hash: str, now: dt.datetime, ttl_seconds: int,
+                    now_override: bool = False) -> dict:
+    """Appends the start record of an apply (result started), which uses up the dry-run record, before any change.
+
+    The dry-run record is looked up again under the log lock, so two applies started at the same time cannot both use
+    the same record. NoDryRun if there is none (nothing appended); OSError if the log cannot be written."""
+    def guard(lines):
+        if _find_dry_run(lines, plan_hash, input_hash, now, ttl_seconds, now_override, "dry-run", "apply") is None:
+            raise NoDryRun()
+    return append(dict(record, result=STARTED), guard)
 
 
 def records() -> list[dict]:

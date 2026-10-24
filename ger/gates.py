@@ -405,6 +405,11 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
         return rej, []
     if command in ("confirm", "recover"):
         return [], []
+    # G-8 an unfinished journal (an apply that was killed, or whose rollback failed) must be recovered first. Running
+    #   another apply on top of it would leave a journal that ger recover replays later, undoing the newer changes
+    r = _open_journal_rejections()
+    if r:
+        return r, []
 
     items = [it for it in plan["items"] if it["decision"] == "remediate"]
     allowed = set(inp["allowed_actions"])
@@ -470,6 +475,19 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
             pool.close()
             return [Rejection("G-8", f"no successful dry-run record of the same plan and input within {dry_run_ttl} seconds")], []
     return [], steps
+
+
+def _open_journal_rejections() -> list[Rejection]:
+    try:
+        journals = store.open_journals()
+    except OSError as e:
+        return [Rejection("G-8", f"cannot read the journals of the quarantine store ({e.strerror or e})")]
+    out = []
+    for run_id, recs in journals[:8]:
+        head = recs[0] if recs and isinstance(recs[0], dict) else {}
+        out.append(Rejection("G-8", f"an earlier apply did not finish (run {run_id}, plan {head.get('plan_id')}): its journal is still "
+                                    "open. Run ger recover with that plan's input first (nothing is applied while a journal is open)"))
+    return out
 
 
 def make_ctx(plan: dict, pool: fsutil.FdPool) -> Ctx:

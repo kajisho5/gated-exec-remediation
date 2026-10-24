@@ -76,7 +76,7 @@ No operation deletes files. Every operation keeps the state before the change in
 | G-7 | Pre-validation of targets (all) | The target does not exist / is not a normalized absolute path / has a symbolic link as an intermediate element (walked from `/` one element at a time with `O_PATH\|O_NOFOLLOW\|O_DIRECTORY`) / the audit log, the quarantine store or a directory above them / more than one operation on the same target outside a group, or one target above another / an operation-specific check fails (chmod: adds a permission bit missing from the current mode. quarantine: type, hash, `st_nlink`, FIFO, different device. edits: over 1 MiB, xattr, mismatch of `file_sha256` and `expected_after_sha256`) / `action.evidence` (`evidence_hash` in 1.0) does not match the current finding_path | Limited targets, no partial application, binds the dry-run result to apply |
 | G-9 | Scope and relation | For operations that change files (other than chmod): no `plan.scope`, or a target outside `scope.roots` and `scope.home` / the quarantine store under scope.roots, site-packages, node_modules or PATH / a protected target (§10.6) / outside the `/etc` allowlist / a target that requires root (under a system directory, or owner is not the executing user) with fewer than 2 approvers, or targets that require root and targets that do not in the same plan / `action.relation` does not hold lexically or on the file system (§10.3) | GER derives the relation between target and finding again by itself |
 | G-10 | Definition T (narrowing only) | A removed unit does not match GER's table H (T-1), an added value is not in table K (T-2), the result re-parsed after the change does not equal "before - removed units (+) K replacements" (T-3), cosmetic remediation (Q-6) | A tampered plan still cannot make a loosening change |
-| G-8 | dry-run record (apply only) | The audit log has no unused successful dry-run record with the same `plan_hash`, `input_hash` and the same `--now` handling, or it is older than `GER_DRYRUN_TTL` (default 24 hours). A record is used up by an apply that got as far as execution (result ok / rolled_back / rollback_failed / applied_unlogged) | No apply without a dry-run; one dry-run for one apply |
+| G-8 | dry-run record and unfinished journals | apply: the audit log has no unused successful dry-run record with the same `plan_hash`, `input_hash` and the same `--now` handling, or it is older than `GER_DRYRUN_TTL` (default 24 hours). A record is used up by the start record (`result: "started"`) that an apply appends before its first change, so also by an apply that was killed (§3.1). verify / dry-run / apply: the quarantine store holds an unfinished journal (an apply that was killed or whose rollback failed); run `ger recover` first | No apply without a dry-run; one dry-run for one apply; never an apply on top of an unfinished one |
 
 `held[]` is not read. Only `items[]` with `decision == "remediate"` are executed (`exception` / `defer` are `skipped`).
 
@@ -99,6 +99,21 @@ all items G-1 to G-8 -> OK
         apply -> check after with lstat again right away (TOCTOU: st_ino / st_dev must match before and after)
         failure -> stop and put the applied items back to before in reverse order (rolled_back)
 ```
+
+### 3.1 Crash, retry and recover
+
+An apply that is killed (SIGKILL, power loss) writes no final audit record and leaves its journal open. Two rules keep a retry and a later `ger recover` from undoing a committed remediation:
+
+1. **The dry-run record is used up before the first change.** After the gates pass, apply appends a start record (`command: "apply"`, `result: "started"`, with the `run_id` of its journal) to the audit log under the log lock, after checking again under that lock that an unused dry-run record exists. Only then does it change anything. A second apply with the same dry-run is rejected by G-8 even if the first one was killed; the final record carries the same `run_id`.
+2. **Nothing runs on top of an unfinished journal.** verify, dry-run and apply are rejected by G-8 while the quarantine store holds an open journal, with the run id and plan id of that journal; the operator runs `ger recover` with that plan's input first. A journal that recover cannot close (its rollback fails again) needs manual resolution; after that, the journal file is moved out of `<store>/journal/` by hand.
+
+`ger recover` replays an open journal only when that is safe:
+
+- **Superseded journals are not replayed.** If the audit log shows another apply (started or executed) or a restore after the start record of the journal's run, the journal is closed with the event `superseded` and nothing is rolled back: the later run changed or confirmed (`already_compliant`) the same targets, and replaying the old journal would undo them. The targets keep their current state; dry-run and apply finish the plan. A journal written by an earlier GER has no start record; then every record from the second of its run id on counts as later (except an apply `rollback_failed` record of the same plan and input without `run_id`, which can be its own final record).
+- **All or nothing.** Before undoing anything, recover checks every step it would undo: a quarantined object must still be in the store and its original location free; an edited file must still hold exactly the bytes GER wrote (`after_sha256`) with the backup in place; a chmod target must be the same i-node with GER's mode. If any step fails the check, nothing is undone, the journal stays open and the exit code is 5.
+- **Kill points between a change and its journal line.** A stage is journaled before the change it announces. When the process dies right after the change, recover reads the state from the file system: a move noted at stage `entry` whose payload is already in the store counts as moved; an edit noted at `linked` whose temporary file is gone and whose target is a new i-node with the expected content counts as replaced; a chmod intent (`stage: "start"`, journaled before the change) is undone only if the mode is GER's. A backup hard link made just before the kill (the target unchanged) is removed from the store so the target is not left with `st_nlink` 2; the content stays at the target. A step already undone by an interrupted rollback is recognized and skipped.
+
+The test `TestKillPoints` kills apply with SIGKILL right after each of its file-system changes and fsyncs (77 points for a plan of quarantines, a tree, MCP edits, a line removal and chmods), retries apply (rejected), runs recover, and checks that the tree is either fully remediated or fully restored, that a new dry-run and apply then finish the plan, and that the audit log is a valid hash chain.
 
 - If even one item is `failed`, the rest is not executed (contract §7)
 - If the rollback itself fails: exit code 5; every target and its state is recorded in the log and manual action is requested
@@ -181,7 +196,9 @@ Files added in Phase 1: `ger/fsutil.py` (fd-based target resolution, tree hash),
 | `mode` is `"600"` (no leading 0) or `0o600` | Only the string `^0[0-7]{3}$` is accepted |
 | The log directory is not writable | Nothing runs; rejected (no operation that cannot be recorded) |
 | The end of the audit log is broken (a cut-off line and so on) | Nothing is appended and nothing runs (64). Check with `ger verify-log`, move the log aside and run again |
-| A second apply with the same dry-run | Rejected by G-8 (a dry-run record is used up once) |
+| A second apply with the same dry-run | Rejected by G-8 (a dry-run record is used up once, by the start record appended before the first change) |
+| apply was killed, then apply is run again | Rejected by G-8 (dry-run record used up, unfinished journal). Run `ger recover`, then dry-run and apply (§3.1) |
+| `ger recover` after another apply ran over a stale journal (earlier GER) | The journal is closed as `superseded` and not replayed (§3.1) |
 | Making a dry-run expired in real time look unexpired with `--now` | Rejected by G-8 (an apply with `--now` counts only dry-runs with `--now`) |
 
 ---
@@ -233,6 +250,8 @@ Approvers approve "the exact bytes after the change" (`expected_after_sha256`) a
 | edit_toml / disable_mcp_server | `mcp.server.toml`: `[mcp_servers.<name>]` in `.codex/config.toml` | — |
 | remove_line | `sh.ld_preload` / `sh.curl_pipe_sh` / `sh.base64_pipe_sh` / `sh.histfile_null` (shell rc), `git.exec_key` (`fsmonitor` / `sshCommand` / `hooksPath`), `php.auto_prepend`, `ldso.entry`, `cron.fetch_exec` (`/etc/cron.d/*`). The whole line must match | — |
 | quarantine | The finding's target itself, or a target derived by a relation of §10.3 | — |
+
+`MCP_DANGER` and the hook pattern `DANGEROUS_CMD` are matched by linear-time scanners (`hazards.mcp_danger` / `hazards.dangerous_cmd`; round 5), since a file of up to 1 MB from the scanned tree is matched: a head, the maximal run of `-` tokens after it (possessive), and flags written so they cannot backtrack. They give the same result as the regular expressions (kept in the comments and in `tests/test_hazards.py`, which compares them on a random corpus), so the table version does not change.
 
 Anything not in the table (`permissions.deny`, `ignore-scripts=true` in `.npmrc`, `disable_functions` and so on) cannot be removed. T-3 is checked with `json.loads` for JSON, with `json.loads` after removing comments and trailing commas by a separate path for JSONC, with `tomllib` for TOML, and for text by checking that the bytes other than the removed lines match. It is checked on both dry-run and apply.
 
