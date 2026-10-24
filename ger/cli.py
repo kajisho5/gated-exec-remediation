@@ -355,7 +355,8 @@ def _cmd_plan(args, inp, now, clock, ttl, max_age, record, st, pool):
         start = {k: v for k, v in record.items() if k in ("command", "operator", "started_at", "now_override", "plan_id",
                                                            "plan_hash", "input_hash")}
         # The targets let ger recover tell whether this run touched the targets of an older open journal (per target)
-        start["targets"] = sorted({s.target for s in steps if isinstance(s.target, str)})
+        #   (a checklist changes nothing, so it touches no target)
+        start["targets"] = sorted({s.target for s in steps if isinstance(s.target, str) and s.type != "checklist"})
         try:
             audit.consume_dry_run(dict(start, run_id=run_id), record["plan_hash"], record["input_hash"], now, ttl,
                                   bool(args.now))
@@ -732,7 +733,8 @@ def _record_targets(r: dict) -> list | None:
         return [t for t in r["targets"] if isinstance(t, str)]
     items = r.get("items")
     if isinstance(items, list) and len(items) < 512:
-        return [i.get("target") for i in items if isinstance(i, dict) and isinstance(i.get("target"), str)]
+        return [i.get("target") for i in items if isinstance(i, dict) and isinstance(i.get("target"), str)
+                and i.get("type") != "checklist"]
     rid = r.get("run_id")
     if isinstance(rid, str) and re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]+", rid):
         try:

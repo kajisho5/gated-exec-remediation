@@ -139,6 +139,11 @@ class RestoreStep:
             try:
                 pst = os.stat("payload", dir_fd=efd, follow_symlinks=False)
             except FileNotFoundError:
+                try:
+                    os.stat("rolled_back.json", dir_fd=efd, follow_symlinks=False)
+                    raise ActionError("this entry was rolled back (the object is already at its original location)") from None
+                except FileNotFoundError:
+                    pass
                 if self._back_in_place(efd):
                     self.state = "moved"
                     return
