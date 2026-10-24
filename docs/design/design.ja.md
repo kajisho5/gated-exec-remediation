@@ -109,11 +109,13 @@ Phase 1 では、同じ `action.group` の item を 1 つのステップ（ト�
 
 `ger recover` は安全なときだけ開いたジャーナルを再生する。
 
-- **上書きされたジャーナルは再生しない。** そのジャーナルの実行の開始の記録より後に、別の apply（開始した、または実行した）か restore が監査ログにあれば、ジャーナルを `superseded` の事象で閉じ、何も巻き戻さない。後の実行が同じ対象を変えたか確かめており（`already_compliant`）、古いジャーナルを再生するとそれを元に戻してしまうため。対象は今の状態のままで、dry-run と apply で計画を完了する。以前の GER が書いたジャーナルには開始の記録が無い。その場合は run id の秒以降に始まったすべての記録を後のものと数える（`run_id` の無い、同じ計画・入力の apply の `rollback_failed` の記録は除く。それ自身の最後の記録でありうるため）
+- **上書きされたステップは再生しない（対象ごと）。** そのジャーナルの実行の開始の記録より後に、あるステップの対象（同じパス、またはその上か下のパス）に触れた別の apply（開始した、または実行した）か restore が監査ログにあれば、そのステップは飛ばし（`superseded`）、対象は今の状態のままにする。後の実行がその対象を変えたか確かめており（`already_compliant`）、古いジャーナルを再生するとそれを元に戻してしまうため。後の実行の対象は、その開始の記録（round 6 からの `targets`）、最後の記録（`items`。512 件で切れていなければ）、またはそのジャーナルから得る。対象が分からない実行は、すべての対象に触れたものと数える。ほかの対象のステップはこれまでどおり巻き戻す。dry-run と apply で計画を完了する。飛ばしたステップの、落ちた時点で GER が作ってほかに何も持たない残り物（置き換えに至らなかった編集の一時ファイル、置き換えていない対象のバックアップのハードリンク）は取り除き、次の preview が `st_nlink` 2 で拒否されないようにする。すべてのステップが上書きされていれば `superseded` の事象で、そうでなければ `recovered`（`superseded_steps` 付き）で閉じる
+- **以前の GER のジャーナルは記録の順で位置を決める。** 04e9aea より前に書かれたジャーナルには開始の記録が無い。その実行は同じ計画・入力の dry-run の成功の後に行われたので、最初のそうした dry-run より後のすべての記録を後のものと数える（時計ではなく記録の順。時計が戻っても後の apply を見落とさない）。その後にある、`run_id` の無い同じ計画・入力の apply の `rollback_failed` の記録は、それ自身の最後の記録でありうるため数えない。監査ログにそうした dry-run が無ければ（たとえばログを移した）順序を決められないので、recover は再生せずにジャーナルを拒否する（終了コード 5、何も巻き戻さない）
 - **全部か無しか。** 何かを元に戻す前に、元に戻すすべてのステップを確かめる。隔離した物がストアにあり元の場所が空いていること、編集したファイルが GER の書いたバイト列（`after_sha256`）のままでバックアップがあること、chmod の対象が同じ i-node で GER の mode であること。1 つでも合わなければ何も元に戻さず、ジャーナルは開いたまま、終了コードは 5
-- **変更とそのジャーナルの行の間で落ちた場合。** 段階は、それが告げる変更の前にジャーナルに書く。変更の直後にプロセスが落ちたら、recover はファイルシステムから状態を読む。段階 `entry` の移動でペイロードがすでにストアにあれば移動済み、段階 `linked` の編集で一時ファイルが無く対象が期待した内容の新しい i-node なら置き換え済み、chmod の意図（`stage: "start"`、変更の前に記録）は mode が GER のものであるときだけ元に戻す。落ちる直前に作ったバックアップのハードリンク（対象は変わっていない）は、対象が `st_nlink` 2 のまま残らないようストアから外す（内容は対象に残る）。途中で止まったロールバックで元に戻っていたステップは、それと認めて飛ばす
+- **変更とそのジャーナルの行の間で落ちた場合。** 段階は、それが告げる変更の前にジャーナルに書く。変更の直後にプロセスが落ちたら、recover はファイルシステムから状態を読む。段階 `entry` の移動でペイロードがすでにストアにあれば移動済み、段階 `linked` の編集で一時ファイルが無く対象が期待した内容の新しい i-node なら置き換え済み、chmod の意図（`stage: "start"`、変更の前に記録）は mode が GER のものであるときだけ元に戻す。落ちる直前に作ったバックアップのハードリンク（対象は変わっていない）は、対象が `st_nlink` 2 のまま残らないようストアから外す（内容は対象に残る）。途中で止まったロールバックで元に戻っていたステップは、それと認めて飛ばす（物が元の場所に戻っている移動、対象にバックアップが戻っている編集、同じ i-node で元の mode の chmod の対象。chmod は元に戻したときに ctime が変わる。round 6）
+- **ジャーナルの書き込みを確かめる。** ジャーナルの各行は全体を書いて fsync するか、書き込みが失敗するかのどちらか。短い書き込み（ほぼ満杯のファイルシステム）は ENOSPC として扱い、ファイルを最後の完全な行まで切り詰めるので、後の行がつながる途中までの記録はジャーナルに残らない。ジャーナルの書き込みに失敗した apply は次の変更の前に止まり、変えたものをプロセスの中で巻き戻し、残りの記録をファイルシステムが許す範囲で書き、終了コード 5 で終わる（監査ログは `result: "journal_failed"`。70 にはならない）。apply が確定するのは commit の記録がジャーナルにあるときだけで、commit を書けなければすべて巻き戻す。ジャーナルが開いたまま残ったら、空きを作ってから `ger recover` を実行すると、すべてのステップが元に戻っていると認めて閉じる。読み込みでは、解析できない最後の行は捨てる（強制終了で途中で切れた書き込み。GER は変更の前に意図を記録するので、失われた最後の行はその直前で落ちたのと同じ）。記録が 1 つも無いジャーナル（0 バイト、または途中で切れた begin の行だけ。その下では何も変わっていない）は閉じたものとする。途中の行が解析できない（GER がそのように書くことは無い）ジャーナルは壊れたものとし、G-8 はそれを示し、recover は拒否する（終了コード 5）。G-8 と recover は同じ関数でジャーナルを読むので、何が開いているかで食い違わない
 
-テスト `TestKillPoints` は、apply をファイルシステムの変更と fsync のそれぞれの直後に SIGKILL で止め（隔離・ツリー・MCP の編集・行の削除・chmod の計画で 77 か所）、apply を再実行し（拒否される）、recover を実行して、対象が完全に修復済みか完全に元どおりのどちらかであること、その後の dry-run と apply で計画が完了すること、監査ログのハッシュチェーンが正しいことを確かめる。
+テスト `TestKillPoints` は、apply をファイルシステムの変更と fsync のそれぞれの直後に SIGKILL で止め（隔離・ツリー・MCP の編集・行の削除・chmod の計画で 77 か所）、apply を再実行し（拒否される）、recover を実行して、対象が完全に修復済みか完全に元どおりのどちらかであること、その後の dry-run と apply で計画が完了すること、監査ログのハッシュチェーンが正しいことを確かめる。また、commit の前で止まった apply の後で recover を最初の変更（chmod を元に戻す変更とそのジャーナルの行）のそれぞれの直後で止め、restore を変更のたびに止めて再実行する。`TestRound6` はジャーナルへの短い書き込みと ENOSPC、切れた・空の・壊れたジャーナル、1 つの対象に触れた後の apply、無関係な restore、時計が戻った以前の GER のジャーナルを試す。
 
 - 1 件でも `failed` が出たら残りは実行しない（契約 §7）
 - ロールバック自体が失敗した場合は終了コード 5、ログに対象と状態を全件記録して人手対応を促す
@@ -209,6 +211,8 @@ Phase 1 で追加したファイル: `ger/fsutil.py`（fd でたどる対象の�
 - 承認後の plan 差し替えを G-3 で検出
 - dry-run なし apply の拒否、期限切れ dry-run の拒否、ハッシュチェーン破損時の拒否
 - 外部プロセスゼロ: `strace -f -e trace=execve` で `python3` 以外の execve が 0 件
+- 強制終了: apply・recover（chmod を元に戻す箇所）・restore のファイルシステムの変更のたびに SIGKILL。ジャーナルの書き込みの障害（短い書き込み、ENOSPC）（§3.1）
+- エージェントフックを実際の ZES のスキャンと比べる: `tests/e2e_hooks.py`（§10.2）。`GER_E2E=1` の `tests/run-tests.sh` で実行
 
 ---
 
@@ -239,19 +243,26 @@ Phase 1 で追加したファイル: `ger/fsutil.py`（fd でたどる対象の�
 
 承認者は「変更後の正確なバイト列」（`expected_after_sha256`）と「隔離するものの正確なハッシュ」を承認することになる。apply は計算し直した結果がこれと違えば止まる。
 
-### 10.2 定義 T（絞るだけ）の表（`ger/hazards.py`、版 `ger-hazards-3`）
+### 10.2 定義 T（絞るだけ）の表（`ger/hazards.py`、版 `ger-hazards-4`）
 
 | 操作 | H（取り除いてよい単位。ファイルの種類ごと） | K（足してよい定数） |
 |---|---|---|
 | edit_json / disable_mcp_server | `mcp.server`: MCP 設定（`.mcp.json` / `mcp.json` / `mcp_config.json` / `.claude.json` / `claude_desktop_config.json`）の `/mcpServers/<name>`・`/servers/<name>`・`/projects/<p>/mcpServers/<name>`（値は object）。preview の自動選択は ZES §17 の `MCP_DANGER_RE` を写した `MCP_DANGER`（大文字小文字を区別しない。command の改行で分けた行ごと）に一致するサーバーだけ（ger-hazards-2。-1 はシェル -c・node -e・python -c・powershell -enc だけで、ZES round 3 の `cmd /c`・`deno eval`・`node --eval`・`bash --norc -c`・`-xc`・`perl -e`・`ruby -e`・`pwsh -Command` を自動で取り除けなかった。ger-hazards-3: C ロケールの grep と同じく `\s` と大文字小文字の同一視を ASCII だけにし、pwsh の分岐を線形時間にし、command / args を ZES と同じ形で組み立てる（文字列以外は jq の `tostring`、NUL は落とす。TOML は文字列だけ、制御文字は空白）） | — |
 | edit_json | `npm.lifecycle`: `package.json` の `/scripts/(preinstall\|install\|postinstall\|prepare\|…)` | — |
-| edit_json | `claude.hook`: `.claude/settings(.local).json` の `/hooks/<Event>/<i>`（と `/hooks/<Event>/<i>/hooks/<j>`） | — |
+| edit_json | `claude.hook`: `.claude/settings(.local).json` の `/hooks/<Event>/<i>`（と、明示した ops でだけ `/hooks/<Event>/<i>/hooks/<j>`）。自動選択は ZES が報告する項目だけを選ぶ（`hazards.flagged_hooks`。ger-hazards-4、下を参照） | — |
 | edit_json | `vscode.task_run_on`: `.vscode/tasks.json` の `/tasks/<i>/runOptions/runOn`（値が `folderOpen`） | `"default"` |
 | edit_toml / disable_mcp_server | `mcp.server.toml`: `.codex/config.toml` の `[mcp_servers.<name>]` | — |
 | remove_line | `sh.ld_preload` / `sh.curl_pipe_sh` / `sh.base64_pipe_sh` / `sh.histfile_null`（シェルの rc）、`git.exec_key`（`fsmonitor` / `sshCommand` / `hooksPath`）、`php.auto_prepend`、`ldso.entry`、`cron.fetch_exec`（`/etc/cron.d/*`）。行の全体が一致すること | — |
 | quarantine | finding の対象そのもの、または §10.3 の関係で導いた対象 | — |
 
-`MCP_DANGER` とフックのパターン `DANGEROUS_CMD` は線形時間の走査（`hazards.mcp_danger` / `hazards.dangerous_cmd`。round 5）で一致を調べる。スキャン対象から来た 1 MB までのファイルを照合するため。先頭のコマンド、その後ろの `-` で始まるトークンの最長の並び（所有的）、バックトラックしない形のフラグの順に調べる。結果は正規表現と同じ（正規表現はコメントと `tests/test_hazards.py` に残し、乱数の入力で比べる）なので、表の版は変えない。
+**claude.hook（ger-hazards-4、round 6）。** ZET は `.claude/settings(.local).json` の §17 のエージェントフックの finding と §7 のキャンペーン文字列の finding に `edit_json select claude.hook` を提案するので、自動選択は ZES 0.5.3 の次のどちらかの規則が報告するフックの項目をちょうど取り除き、それ以外は取り除かない。
+
+- §17 `s17.agent_hook`（`check_s17` と `HOOK_ENTRY_CMDS`。UI では `agentConfig.ts`）。ファイルの文に `"hooks"` があるときだけ読む。項目は、最上位のオブジェクト `hooks` の値である配列の要素（イベント名も型も問わない）。(a) ファイル全体の事前選別が成り立ち（生の文のある行が `"hooks"\s*:` に、ある行が `"command"\s*:\s*"[^"]*(curl|wget|base64|nc |/dev/tcp)` に一致。grep の行ごと、`\s` は ASCII）、項目の中のどこかの `.command` の文字列が `curl`・`wget`・`base64`・`nc `・`/dev/tcp` を含む（大文字小文字を区別）か、(b) 項目の中のどこかの `command` を持つオブジェクトの command + args の行（MCP サーバーと同じ組み立て: jq の `tostring`、NUL は落とし、改行で分ける。bash の `read` は行の末尾の単位区切り文字を 1 つ落とす）が `MCP_DANGER`（大文字小文字を区別しない）に一致すれば報告する
+- §7 `intel.campaign_string`: 生の文が ZES の `rules/ioc.json` のキャンペーン文字列（§7 の `intel.strings` で `file_regex` が `.claude/` に一致するもの。`CAMPAIGN_HOOK_STRINGS` に写した）を ASCII の大文字小文字を区別せずに含み、項目の中の `.command` の文字列がそれを含む
+
+ger-hazards-3 は `DANGEROUS_CMD`（大文字小文字を区別し、`command` だけ）か `LOCAL_SCRIPT`（`node|python|bash … <パス>` のコマンドすべて）にしか一致せず、リバースシェル（`bash -i >& /dev/tcp/…`、`nc -e`）、`-lc` / `-Ic`、大文字のコマンド、args の配列は取り除けず、無害な `node .claude/format.mjs` を取り除いていた。`LOCAL_SCRIPT` は無くした。ZES は `node .claude/setup.mjs` に §17 の finding を出さないが、そのキャンペーン文字列（§7、`actions-cool-reactivation-sep2026`）は表にあるので、このフックは引き続き取り除き、ほかのスクリプトのフックは取り除かない。`tests/e2e_hooks.py` は設定ファイルの集まり（round 6 の報告の例、キャンペーン文字列、似た文字列、入れ子のフック、args、文字列でない値、JSONC、エスケープ、事前選別の罠、乱数のコマンド行）を作り、実際の ZES のスキャンの locator とファイルごとに `flagged_hooks` を比べ、zet → ger preview → apply → 再スキャンを行い、修復したファイルにフックの finding が残らないこと、各ファイルが元のフックから報告された項目を除いたものとちょうど同じであることを確かめる。`CAMPAIGN_HOOK_STRINGS` と ZES の `rules/ioc.json` も比べる。
+
+`MCP_DANGER` は線形時間の走査（`hazards.mcp_danger`。round 5）で一致を調べる。スキャン対象から来た 1 MB までのファイルを照合するため。先頭のコマンド、その後ろの `-` で始まるトークンの最長の並び（所有的）、バックトラックしない形のフラグの順に調べる。結果は正規表現と同じ（正規表現はコメントと `tests/test_hazards.py` に残し、乱数の入力で比べる）。上のフックの規則も線形（`TestLinearTime`）。
 
 表に無いもの（`permissions.deny`、`.npmrc` の `ignore-scripts=true`、`disable_functions` など）は取り除けない。T-3 は JSON は `json.loads`、JSONC はコメントと末尾カンマを別の経路で除いてから `json.loads`、TOML は `tomllib`、テキストは取り除いた行以外のバイトの一致で確かめる。dry-run と apply の両方で確かめる。
 
@@ -281,7 +292,7 @@ group（同じ対象への複数の finding）では、1 件目だけでなく�
 
 ### 10.5 restore（Q-4）
 
-`restore-request.json`（`schemas/restore-request.schema.json`）は `restore_id`・`entries[{quarantine_id, manifest_sha256}]`・`approval{approved_by（2 名以上）, approved_at, approval_token}` を持つ。`approval_token` は approval と mode を除いた正規化 JSON の SHA-256。dry-run の成功記録が必要で、1 回の apply で使い切る（監査ログの command は `restore-dry-run` / `restore-apply`）。前提: マニフェストの SHA-256 が一致、ストアの中身（ロック後のハッシュ・実体 ID）がマニフェストと一致、隔離したものは元のパスが空いている、編集は現在のファイルが GER の書いた内容（`after_sha256`）のまま。戻す前の編集後のファイルは `replaced` としてストアに残す。途中で失敗したら戻したものを再び隔離する。
+`restore-request.json`（`schemas/restore-request.schema.json`）は `restore_id`・`entries[{quarantine_id, manifest_sha256}]`・`approval{approved_by（2 名以上）, approved_at, approval_token}` を持つ。`approval_token` は approval と mode を除いた正規化 JSON の SHA-256。dry-run の成功記録が必要で、1 回の apply で使い切る（監査ログの command は `restore-dry-run` / `restore-apply`）。前提: マニフェストの SHA-256 が一致、ストアの中身（ロック後のハッシュ・実体 ID）がマニフェストと一致、隔離したものは元のパスが空いている、編集は現在のファイルが GER の書いた内容（`after_sha256`）のまま。戻す前の編集後のファイルは `replaced` としてストアに残す。途中で失敗したら戻したものを再び隔離する。強制終了された restore は同じ要求で再実行できる（round 6）。dry-run の記録は未使用のままで、検査は途中で止まった restore が残す状態を改ざんとせずに認める。ツリーのメンバーはロック後の mode か元の mode のどちらでもよい（restore は rename の前にメンバーごとに元の mode に戻す）。そのときツリーは、それらの mode を元の mode として元のツリーと同じハッシュになること。同じ i-node ですでに元の場所に戻っている物は移動済みとする（restored.json はこのとき書く）。restored.json の `restore_id` が同じ項目は戻し済みとして飛ばす。`replaced` のリンクが編集後のファイルの 2 つ目の名前である編集はそのまま続ける。その状態での巻き戻しは 2 つ目の名前を外し、ファイルが `st_nlink` 2 のまま残らないようにする。
 
 ### 10.6 保護対象と承認者
 
