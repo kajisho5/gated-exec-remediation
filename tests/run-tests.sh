@@ -19,6 +19,9 @@ echo "== E2E (ZES -> ZET -> GER -> ZES) =="
 # SKIP if the ZES repository (ZES_REPO / ZES_HOME) is missing. Slow, so it runs only when GER_E2E=1
 if [ "${GER_E2E:-0}" = "1" ]; then
   "$ROOT/tests/run-e2e.sh" || FAIL=1
+  # claude.hook against real ZES scans (round 6 F1): same repositories as run-e2e.sh
+  ZES="${ZES_REPO:-${ZES_HOME:-}}"
+  if [ -n "$ZES" ] && [ -f "$ZES/zes-scan.sh" ]; then python3 -I "$ROOT/tests/e2e_hooks.py" --zes "$ZES" || FAIL=1; fi
 else
   echo "E2E skipped (run with GER_E2E=1; tests/run-e2e.sh)"
 fi
