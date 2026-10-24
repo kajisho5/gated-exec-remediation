@@ -220,6 +220,15 @@ def check_move(u: dict) -> None:
     _move_state(u)
 
 
+def _mark_rolled_back(efd: int, qid: str) -> None:
+    """rolled_back.json tells a person that the entry was rolled back; nothing reads it. The rollback itself is done
+    when this runs, so failing to write the note (for example on a full file system) does not fail the rollback."""
+    try:
+        store.write_json_excl(efd, "rolled_back.json", {"quarantine_id": qid})
+    except OSError:
+        pass
+
+
 def move_out(u: dict, verify_digest: bool = False) -> None:
     """Reverse of move_in. Checks that the original location is free, then restores the mode and moves it back with rename."""
     if u["stage"] == "entry" and _move_state(u) == "not_moved":
@@ -244,10 +253,7 @@ def move_out(u: dict, verify_digest: bool = False) -> None:
         finally:
             res.close()
         if u["stage"] == "done":
-            try:
-                store.write_json_excl(efd, "rolled_back.json", {"quarantine_id": u["qid"]})
-            except FileExistsError:
-                pass
+            _mark_rolled_back(efd, u["qid"])
     finally:
         os.close(efd)
 
@@ -266,7 +272,7 @@ def replace_file(rt: Runtime, res: Resolved, expect_ident, before_sha: str, new_
                  dir_fd=res.parent_fd)
     undo["stage"] = "tmp"
     try:
-        os.write(fd, new_bytes)
+        fsutil.write_all(fd, new_bytes)
         os.fchmod(fd, st0.st_mode & 0o7777)
         if rt_is_root() and (st0.st_uid, st0.st_gid) != (os.geteuid(), os.getegid()):
             os.fchown(fd, st0.st_uid, st0.st_gid)
@@ -413,12 +419,29 @@ def unreplace_file(u: dict) -> None:
             if fsutil.hash_file(res.parent_fd, res.name, back) != u["before_sha256"]:
                 raise ActionError("the restored content does not match the content before the edit", applied=True)
             if stage == "done":
-                try:
-                    store.write_json_excl(efd, "rolled_back.json", {"quarantine_id": u["qid"]})
-                except FileExistsError:
-                    pass
+                _mark_rolled_back(efd, u["qid"])
         finally:
             os.close(efd)
+    finally:
+        res.close()
+
+
+def clean_leftovers(undo: dict) -> None:
+    """For a step ger recover does not replay (superseded): removes only what a kill point left that GER created and that
+    holds nothing else: the temporary file of an edit that was never renamed into place, and the backup hard link of a
+    target that was not replaced (a second name of the unchanged target, which GER refuses later as st_nlink 2). The
+    target itself, a full backup (with its manifest) and a quarantined object stay as they are."""
+    if undo.get("op") != "edit" or undo.get("stage") not in ("start", "tmp", "linked"):
+        return
+    res = fsutil.resolve(undo["target"], must_exist=False)
+    try:
+        try:
+            tst = os.stat(undo["tmp"], dir_fd=res.parent_fd, follow_symlinks=False)
+            if stat.S_ISREG(tst.st_mode) and tst.st_nlink == 1:
+                os.unlink(undo["tmp"], dir_fd=res.parent_fd)
+        except FileNotFoundError:
+            pass
+        _drop_stale_backup_link(undo, res)
     finally:
         res.close()
 

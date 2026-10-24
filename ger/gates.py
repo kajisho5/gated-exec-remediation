@@ -483,8 +483,13 @@ def _open_journal_rejections() -> list[Rejection]:
     except OSError as e:
         return [Rejection("G-8", f"cannot read the journals of the quarantine store ({e.strerror or e})")]
     out = []
-    for run_id, recs in journals[:8]:
+    for run_id, recs, damaged in journals[:8]:
         head = recs[0] if recs and isinstance(recs[0], dict) else {}
+        if damaged is not None:
+            out.append(Rejection("G-8", f"the journal of an earlier apply is damaged (run {run_id}, plan {head.get('plan_id')}, "
+                                        f"line {damaged} cannot be read): ger recover does not replay it. Check its targets by "
+                                        "hand, then move the journal out of the journal directory of the quarantine store"))
+            continue
         out.append(Rejection("G-8", f"an earlier apply did not finish (run {run_id}, plan {head.get('plan_id')}): its journal is still "
                                     "open. Run ger recover with that plan's input first (nothing is applied while a journal is open)"))
     return out

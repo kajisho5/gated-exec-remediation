@@ -134,6 +134,10 @@ def _undo_state(u: dict):
             raise ActionError(f"cannot roll back chmod: the mode changed since ({fmt(cur)}): {u['target']}")
         return "revert", st
     if ident_of(st) != tuple(u["ident"]):
+        # A rollback killed between set_mode(before) and its step_rolled_back line leaves the same i-node with the mode
+        #   from before (and a new ctime): GER's change is already undone
+        if st.st_mode & 0o7777 == u["before"]:
+            return "none", st
         raise ActionError(f"cannot roll back chmod: the target changed after the chmod: {u['target']}")
     return "revert", st
 
