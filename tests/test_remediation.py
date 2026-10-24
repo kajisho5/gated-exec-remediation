@@ -8,6 +8,8 @@ import io
 import json
 import os
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 import uuid
@@ -816,6 +818,98 @@ class TestRollbackRecoverTamper(R):
         sub.symlink_to(self.root / "real")
         self.rejected(q, "G-7", "symbolic link")
 
+    def test_open_journal_blocks_apply_and_superseded_journal_is_not_replayed(self):
+        p, paths, snap = self.mixed()
+        self.assertEqual(self.ger("dry-run", self.inp(p, "dry-run"))[0], 0)
+
+        class Crash(BaseException):
+            pass
+        with mock.patch.object(chmod, "set_mode", side_effect=Crash()):
+            with self.assertRaises(Crash):
+                self.ger("apply", self.inp(p, "apply"))
+        # The killed apply used up its dry-run record, and its journal blocks every new dry-run / apply until ger recover
+        c, e = self.ger("apply", self.inp(p, "apply"))
+        self.assertEqual(c, 3, e)
+        self.assertIn("journal is still open", e)
+        c, e = self.ger("dry-run", self.inp(p, "dry-run"))
+        self.assertEqual(c, 3, e)
+        self.assertIn("ger recover", e)
+        self.assertEqual(self.ger("recover", self.inp(p, "apply"))[0], 0)
+        self.assertEqual(self.state(paths), snap)
+        self.assertEqual(self.ger("dry-run", self.inp(p, "dry-run"))[0], 0)
+        c, e = self.ger("apply", self.inp(p, "apply"))
+        self.assertEqual(c, 0, e)
+        done = self.state(paths)
+        self.assertEqual(audit.verify_chain(), [])
+
+        # A journal left by an earlier GER (no start record, no refusal while a journal is open) that a later apply
+        # superseded is closed without replaying it: replaying would undo the committed remediation
+        q, qpaths, qsnap = self.mixed_again()
+        self.assertEqual(self.ger("dry-run", self.inp(q, "dry-run"))[0], 0)
+        old = dict(consume=mock.patch.object(audit, "consume_dry_run", lambda rec, *a, **k: None),
+                   journals=mock.patch("ger.gates._open_journal_rejections", return_value=[]))
+        with old["consume"], old["journals"]:
+            with mock.patch.object(base, "move_in", side_effect=Crash()):  # Killed after the edits, before the quarantines
+                with self.assertRaises(Crash):
+                    self.ger("apply", self.inp(q, "apply"))
+            c, e = self.ger("apply", self.inp(q, "apply"))
+            self.assertEqual(c, 0, e)
+        full = self.state(qpaths)
+        self.assertEqual(len(store.open_journals()), 1)
+        c, e = self.ger("recover", self.inp(q, "apply"))
+        self.assertEqual(c, 0, e)
+        self.assertIn("superseded", e)
+        self.assertEqual(self.state(qpaths), full)
+        self.assertEqual(store.open_journals(), [])
+        self.assertEqual({r["result"] for r in self.log("recover")["results"]}, {"skipped"})
+        self.assertEqual(self.state(paths), done)
+        self.assertEqual(audit.verify_chain(), [])
+
+    def test_apply_does_not_start_without_its_start_record(self):
+        p, paths, snap = self.mixed()
+        self.assertEqual(self.ger("dry-run", self.inp(p, "dry-run"))[0], 0)
+        with mock.patch.object(audit, "consume_dry_run", side_effect=OSError("disk full")):
+            c, e = self.ger("apply", self.inp(p, "apply"))
+        self.assertEqual(c, 64, e)
+        self.assertEqual(self.state(paths), snap)
+        with mock.patch.object(audit, "consume_dry_run", side_effect=audit.NoDryRun()):  # Used up by a concurrent apply
+            c, e = self.ger("apply", self.inp(p, "apply"))
+        self.assertEqual(c, 3, e)
+        self.assertIn("G-8", e)
+        self.assertEqual(self.state(paths), snap)
+        self.assertEqual(self.ger("apply", self.inp(p, "apply"))[0], 0)  # The dry-run record was not used up by either
+
+    def mixed_again(self):
+        """Same shape as mixed() in a second directory of the same scope, as a second plan."""
+        old = self.root
+        self.root = old / "second"
+        self.root.mkdir()
+        try:
+            p, paths, snap = self.mixed()
+        finally:
+            self.root = old
+        p["plan_id"] = "22222222-2222-4333-8444-555555555555"
+        return self.rehash(p), paths, snap
+
+    def test_recover_refuses_a_partial_replay(self):
+        # If one step can no longer be undone exactly (the edited file changed since), recover undoes nothing
+        p, paths, snap = self.mixed()
+        self.assertEqual(self.ger("dry-run", self.inp(p, "dry-run"))[0], 0)
+
+        class Crash(BaseException):
+            pass
+        with mock.patch.object(chmod, "set_mode", side_effect=Crash()):
+            with self.assertRaises(Crash):
+                self.ger("apply", self.inp(p, "apply"))
+        mid = self.state(paths)
+        m = paths[2]
+        m.write_text(m.read_text() + "\n")
+        c, e = self.ger("recover", self.inp(p, "apply"))
+        self.assertEqual(c, 5, e)
+        self.assertIn("cannot be replayed safely", e)
+        self.assertEqual(dict(self.state(paths), m=mid["m"]), mid)  # Nothing else was rolled back
+        self.assertEqual(len(store.open_journals()), 1)
+
     def test_tampered_store_blocks_restore(self):
         f = self.root / "a.js"
         f.write_text("x")
@@ -841,6 +935,127 @@ class TestRollbackRecoverTamper(R):
         m.write_text(m.read_text() + " ")
         self.restore(dry_expect=3)
         self.assertFalse(f.exists())
+
+
+# Runs ger in a child process that kills itself with SIGKILL right after its N-th file-system change or fsync
+# (journal lines, audit records, renames, links, mode changes): every point at which a real crash can stop an apply
+_KILL_DRIVER = r"""
+import os, signal, sys
+sys.path.insert(0, sys.argv[1])
+n, count = int(sys.argv[2]), [0]
+def wrap(f):
+    def g(*a, **k):
+        r = f(*a, **k)
+        count[0] += 1
+        if count[0] == n:
+            os.kill(os.getpid(), signal.SIGKILL)
+        return r
+    return g
+for name in ("fsync", "rename", "replace", "link", "unlink", "mkdir", "fchmod", "chmod"):
+    setattr(os, name, wrap(getattr(os, name)))
+from ger import cli
+sys.exit(cli.main(sys.argv[3:]))
+"""
+
+
+class TestKillPoints(R):
+    """SIGKILL during apply at every change point, then retry apply, ger recover and apply again: the tree is always either
+    fully remediated or fully restored (never a mixture), a retried apply never runs on top of the killed one, and the
+    audit log stays a valid hash chain."""
+
+    def build(self, base_dir, n):
+        self.d = base_dir / f"k{n}"
+        self.root = self.d / "repo"
+        self.root.mkdir(parents=True)
+        os.environ["GER_LOG_DIR"] = str(self.d / "log")
+        os.environ["GER_QUARANTINE_DIR"] = str(self.d / "store")
+        self.n = 0
+        items = []
+        for i in range(2):
+            f = self.root / f"f{i}.js"
+            f.write_text(f"evil{i}()")
+            items.append(self.item({"type": "quarantine", "target": str(f), "params": {}}))
+        t = self.root / "pkg"
+        (t / "sub").mkdir(parents=True)
+        for i in range(3):
+            (t / "sub" / f"{i}.py").write_text("x" * 100)
+        items.append(self.item({"type": "quarantine", "target": str(t), "params": {}}))
+        for i in range(2):
+            items.append(self.item({"type": "disable_mcp_server", "target": str(self.mcp(f"m{i}/.mcp.json")), "params": {"select": "mcp.server"}}))
+        rc = self.root / ".bashrc"
+        rc.write_text("export LD_PRELOAD=/tmp/x.so\nexport PATH=/usr/bin\n")
+        items.append(self.item({"type": "remove_line", "target": str(rc), "params": {}}))
+        for i in range(2):
+            k = self.root / f"k{i}"
+            k.write_text("k")
+            os.chmod(k, 0o644)
+            items.append(self.item({"type": "chmod", "target": str(k), "params": {"mode": "0600"}}))
+        p = self.preview(self.plan(items))
+        self.assertEqual(self.ger("dry-run", self.inp(p, "dry-run"))[0], 0)
+        return p
+
+    def snap(self):
+        out = {}
+        for dp, dns, fns in os.walk(self.root):
+            for x in dns + fns:
+                q = os.path.join(dp, x)
+                st = os.lstat(q)
+                out[os.path.relpath(q, self.root)] = (st.st_mode, st.st_nlink if stat.S_ISREG(st.st_mode) else None,
+                                                      fhash(q) if stat.S_ISREG(st.st_mode) else None)
+        return out
+
+    def killed_apply(self, p, n):
+        inp = self.write(self.inp(p, "apply"), "apply.json")
+        r = subprocess.run([sys.executable, "-I", "-c", _KILL_DRIVER, str(Path(__file__).resolve().parents[1]), str(n),
+                            "apply", inp, "--operator", "ops", "-o", str(self.d / "killed-log.json"), "--now", NOW],
+                           env=dict(os.environ), capture_output=True, text=True, timeout=60)
+        return r.returncode
+
+    def test_sigkill_at_every_point_then_retry_and_recover(self):
+        base_dir = self.d
+        try:
+            p = self.build(base_dir, "ref")
+            before = self.snap()
+            self.assertEqual(self.ger("apply", self.inp(p, "apply"))[0], 0)
+            full = self.snap()
+            self.assertNotEqual(before, full)
+            n, outcomes = 0, {}
+            while True:
+                n += 1
+                self.assertLess(n, 400)
+                p = self.build(base_dir, n)
+                code = self.killed_apply(p, n)
+                if code != -9:  # The whole apply ran before the N-th change point: every point was covered
+                    self.assertEqual(code, 0)
+                    self.assertEqual(self.snap(), full)
+                    break
+                opened = len(store.open_journals())
+                c, e = self.ger("apply", self.inp(p, "apply"))  # Retry with the same input and dry-run record
+                if c == 0:  # Killed before it recorded its start: nothing had changed and the dry-run record was unused
+                    self.assertEqual(opened, 0, n)
+                    self.assertEqual(self.snap(), full, n)
+                else:
+                    self.assertEqual(c, 3, e)
+                    self.assertIn("G-8", e)
+                c, e = self.ger("recover", self.inp(p, "apply"))
+                self.assertEqual(c, 0, f"{n}: {e}")
+                now = self.snap()
+                self.assertIn(now, (before, full), n)
+                if opened:
+                    self.assertEqual(now, before, n)
+                self.assertEqual(store.open_journals(), [], n)
+                self.assertEqual(audit.verify_chain(), [], n)
+                outcomes[n] = "remediated" if now == full else "restored"
+                if now == before:  # A new dry-run and apply finish the plan (no leftover state blocks it)
+                    self.assertEqual(self.ger("dry-run", self.inp(p, "dry-run"))[0], 0, n)
+                    c, e = self.ger("apply", self.inp(p, "apply"))
+                    self.assertEqual(c, 0, f"{n}: {e}")
+                    self.assertEqual(self.snap(), full, n)
+                self.assertEqual(audit.verify_chain(), [], n)
+            self.assertGreater(n, 20)
+            self.assertEqual(set(outcomes.values()), {"remediated", "restored"})
+        finally:
+            self.d = base_dir
 
 
 if __name__ == "__main__":

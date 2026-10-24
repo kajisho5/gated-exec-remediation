@@ -108,16 +108,44 @@ class ChmodStep(Step):
         return fmt(self.before), fmt(self.mode)
 
     def apply(self, rt):
+        # The intent goes to the journal first: a process killed right after the change can still be rolled back by ger recover
+        rt.note(rt.step_no, {"op": "chmod", "stage": "start", "target": self.target, "before": self.before, "mode": self.mode,
+                             "ident": list(self.ident)})
         self.applied_ident = set_mode(self.target, self.mode, self.ident)
-        self.undo = {"op": "chmod", "target": self.target, "before": self.before, "ident": list(self.applied_ident)}
+        self.undo = {"op": "chmod", "stage": "done", "target": self.target, "before": self.before, "mode": self.mode,
+                     "ident": list(self.applied_ident)}
         rt.note(rt.step_no, self.undo)
 
     def rollback(self, rt):
         set_mode(self.target, self.before, self.applied_ident)
 
 
+def _undo_state(u: dict):
+    """(what replaying u does, current lstat): "none" (the change was not made) or "revert". ActionError if the target is
+    not in the state this chmod left (replaced, or its mode changed since): replaying it then would not undo GER's change."""
+    st = os.lstat(u["target"])
+    if stat.S_ISLNK(st.st_mode) or [st.st_dev, st.st_ino] != list(u["ident"][:2]):
+        raise ActionError(f"cannot roll back chmod: the target was replaced: {u['target']}")
+    if u.get("stage") == "start":  # Killed between the intent and the result: the change may or may not have been made
+        cur = st.st_mode & 0o7777
+        if cur == u["before"]:
+            return "none", st
+        if cur != u["mode"]:
+            raise ActionError(f"cannot roll back chmod: the mode changed since ({fmt(cur)}): {u['target']}")
+        return "revert", st
+    if ident_of(st) != tuple(u["ident"]):
+        raise ActionError(f"cannot roll back chmod: the target changed after the chmod: {u['target']}")
+    return "revert", st
+
+
+def check_undo(u: dict) -> None:
+    _undo_state(u)
+
+
 def rollback_undo(u: dict) -> None:
-    set_mode(u["target"], u["before"], tuple(u["ident"]))
+    what, st = _undo_state(u)
+    if what == "revert":
+        set_mode(u["target"], u["before"], ident_of(st))
 
 
 def prepare(ctx, items):

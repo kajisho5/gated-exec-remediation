@@ -311,7 +311,7 @@ def _finish(args, record: dict, st: dict, clock) -> int:
         _err(f"ger: cannot record in the audit log ({e})")
         # apply may already have changed things, so this requires manual action
         mutating = args.command in ("apply", "restore", "recover")
-        return EXIT_ROLLBACK_FAILED if mutating and code != EXIT_REJECTED else EXIT_USAGE
+        return EXIT_ROLLBACK_FAILED if mutating and code not in (EXIT_REJECTED, EXIT_USAGE) else EXIT_USAGE  # 64: nothing changed
     if unlogged:
         return code  # The failure to write remediation-log was already shown
     msg = {EXIT_OK: "OK", EXIT_ROLLED_BACK: "failed; everything was rolled back",
@@ -349,7 +349,24 @@ def _cmd_plan(args, inp, now, clock, ttl, max_age, record, st, pool):
         res = executor.dry_run(inp["plan"], steps)
         st["log_obj"] = _log(inp, "dry-run", record["started_at"], clock(), res, "ok")
     elif args.command == "apply":
-        results, outcome = executor.apply(inp["plan"], steps, clock, plan_hash=record.get("plan_hash"),
+        # Use up the dry-run record durably before the first change (G-8): an apply killed halfway leaves no final
+        # record, and without this start record a second apply with the same dry-run would be accepted
+        run_id = store.new_run_id(clock())
+        start = {k: v for k, v in record.items() if k in ("command", "operator", "started_at", "now_override", "plan_id",
+                                                           "plan_hash", "input_hash")}
+        try:
+            audit.consume_dry_run(dict(start, run_id=run_id), record["plan_hash"], record["input_hash"], now, ttl,
+                                  bool(args.now))
+        except audit.NoDryRun:
+            st.update(code=EXIT_REJECTED, rejections=[Rejection("G-8", "the dry-run record was used up by another apply")])
+            return
+        except OSError as e:
+            _err(f"ger: cannot record the start of the apply in the audit log ({e}) (nothing changed)")
+            record["error"] = "cannot record the start of the apply"
+            st["code"] = EXIT_USAGE
+            return
+        record["run_id"] = run_id
+        results, outcome = executor.apply(inp["plan"], steps, clock, run_id=run_id, plan_hash=record.get("plan_hash"),
                                           input_hash=record.get("input_hash"))
         status = "error" if outcome else ("partial" if inp["plan"]["status"] == "partial" else "ok")
         st.update(outcome=outcome, changed=outcome in (None, executor.ROLLBACK_FAILED),
@@ -566,6 +583,7 @@ def _cmd_recover(args, inp, now, clock, ttl, max_age, record, st, pool):
     ph, ih = record["plan_hash"], record["input_hash"]
     results, failed = [], False
     found = 0
+    audit_recs = audit.records()
     for run_id, recs in store.open_journals():
         head = recs[0] if recs else {}
         if head.get("plan_hash") != ph or head.get("input_hash") != ih:
@@ -578,33 +596,89 @@ def _cmd_recover(args, inp, now, clock, ttl, max_age, record, st, pool):
                 last[r["step"]] = r["undo"]
             elif r.get("event") == "step_rolled_back":
                 undone.add(r["step"])
-        for n in sorted(last, reverse=True):
-            if n in undone:
-                continue
-            u = last[n]
-            fid = (head.get("steps") or [{}])[n].get("finding_ids", ["sha256:" + "0" * 64])[0] if n < len(head.get("steps") or []) else "sha256:" + "0" * 64
-            tgt = (head.get("steps") or [{}])[n].get("target") if n < len(head.get("steps") or []) else None
+        hsteps = head.get("steps") or []
+        todo = [(n, last[n]) for n in sorted(last, reverse=True) if n not in undone]
+
+        def res(n, result, reason, at=None):
+            h = hsteps[n] if n < len(hsteps) and isinstance(hsteps[n], dict) else {}
+            return {"finding_id": (h.get("finding_ids") or ["sha256:" + "0" * 64])[0], "action_type": "recover",
+                    "target": h.get("target"), "before": None, "after": None, "result": result, "reason": reason,
+                    "applied_at": at}
+        later = _superseding_run(run_id, head, audit_recs)
+        if later is not None:
+            # Another run changed targets after this one stopped (for example an apply by an earlier GER, which did not refuse
+            # to start while this journal was open). Replaying the journal now would undo changes that run made or confirmed
+            # (already_compliant), so it is closed without replaying anything; the targets keep their current state
+            by = f"{later.get('command')} {later.get('run_id') or ''} started {later.get('started_at')}".replace("  ", " ")
+            _err(f"ger recover: not replaying journal {run_id}: {by} ran after it, so its changes were superseded. "
+                 "Nothing was rolled back; run dry-run and apply again to finish the plan")
+            store.append_journal(run_id, {"event": "superseded", "operator": args.operator, "by": by})
+            results += [res(n, "skipped", f"superseded:{run_id}") for n, _u in todo]
+            continue
+        # Check every step before undoing any of them, so a recover never leaves a mixture of undone and kept changes
+        problems = []
+        for n, u in todo:
+            try:
+                (chmod_mod.check_undo if u.get("op") == "chmod" else base_mod.check_undo)(u)
+            except Exception as e:
+                problems.append((n, f"{type(e).__name__}: {e}"))
+        if problems:
+            failed = True
+            bad = dict(problems)
+            _err(f"ger recover: journal {run_id} cannot be replayed safely (nothing was rolled back; the journal stays open)")
+            results += [res(n, "failed", f"not replayed: {bad[n]}" if n in bad else "not replayed: another step cannot be undone")
+                        for n, _u in todo]
+            continue
+        jfailed = False
+        for n, u in todo:
             try:
                 if u.get("op") == "chmod":
                     chmod_mod.rollback_undo(u)
                 else:
                     base_mod.rollback_undo(u)
                 store.append_journal(run_id, {"event": "step_rolled_back", "step": n})
-                results.append({"finding_id": fid, "action_type": "recover", "target": tgt, "before": None, "after": None,
-                                "result": "rolled_back", "reason": f"recovered:{run_id}", "applied_at": fmt_ts(clock())})
+                results.append(res(n, "rolled_back", f"recovered:{run_id}", fmt_ts(clock())))
             except Exception as e:
-                failed = True
-                results.append({"finding_id": fid, "action_type": "recover", "target": tgt, "before": None, "after": None,
-                                "result": "failed", "reason": f"{type(e).__name__}: {e}", "applied_at": None})
-        if not failed:
+                jfailed = True
+                results.append(res(n, "failed", f"{type(e).__name__}: {e}"))
+        if jfailed:
+            failed = True
+        else:
             store.append_journal(run_id, {"event": "recovered", "operator": args.operator})
     if not found:
         _err("ger recover: no unfinished journal for this plan and input")
-    st["changed"] = bool(results)
+    st["changed"] = any(r["result"] == "rolled_back" for r in results)
     st["code"] = EXIT_ROLLBACK_FAILED if failed else EXIT_OK
     st["outcome"] = executor.ROLLBACK_FAILED if failed else None
     st["log_obj"] = _log(inp, "recover", record["started_at"], clock(), results, "error" if failed else "ok")
     record["recovered_journals"] = found
+
+
+def _superseding_run(run_id: str, head: dict, recs: list[dict]) -> dict | None:
+    """The first audit record of a run that changed targets after the run of this journal started, or None.
+
+    The run is found by its start record (run_id). A journal written by an earlier GER has none; then every record that
+    started in or after the second of its run id counts as later, except an apply rollback_failed record of the same plan
+    and input without run_id (that can be the run's own final record). Later runs: apply (started or executed) and restore."""
+    idx = next((i for i, r in enumerate(recs) if r.get("command") == "apply" and r.get("run_id") == run_id), None)
+    if idx is not None:
+        later = recs[idx + 1:]
+    else:
+        m = re.fullmatch(r"([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})Z-[0-9a-f]+", run_id)
+        since = f"{m[1]}-{m[2]}-{m[3]}T{m[4]}:{m[5]}:{m[6]}Z" if m else ""
+        later = [r for r in recs if not isinstance(r.get("started_at"), str) or r["started_at"] >= since]
+    for r in later:
+        if r.get("run_id") == run_id:
+            continue
+        cmd, result = r.get("command"), r.get("result")
+        if cmd == "apply" and result in audit.EXECUTED_RESULTS + (audit.STARTED,):
+            if idx is None and "run_id" not in r and result == "rollback_failed" and r.get("plan_hash") == head.get("plan_hash") \
+                    and r.get("input_hash") == head.get("input_hash"):
+                continue
+            return r
+        if cmd == "restore-apply" and result in audit.EXECUTED_RESULTS:
+            return r
+    return None
 
 
 # --- quarantine-list ----------------------------------------------------------------------------

@@ -655,7 +655,9 @@ class TestExecution(Base):
         self.assertEqual(code, 5, err)
         self.assertIn("by hand", err)
         recs = [json.loads(line) for line in audit.log_path().read_text().splitlines()]
-        self.assertEqual([r["result"] for r in recs], ["error", "rejected", "ok", "applied_unlogged"])
+        # The start record (started) is appended before the first change and uses up the dry-run record
+        self.assertEqual([r["result"] for r in recs], ["error", "rejected", "ok", "started", "applied_unlogged"])
+        self.assertEqual(recs[-2]["run_id"], recs[-1]["run_id"])
         self.assertNotIn("output_hash", recs[0]); self.assertNotIn("output_hash", recs[-1])
 
     def test_now_override_requires_env(self):
@@ -700,7 +702,8 @@ class TestExecution(Base):
         self.dry_then_apply(self.ger_input())
         self.ger("verify", self.ger_input(allowed=()))
         recs = [json.loads(line) for line in audit.log_path().read_text().splitlines()]
-        self.assertEqual([(r["command"], r["result"]) for r in recs], [("dry-run", "ok"), ("apply", "ok"), ("verify", "rejected")])
+        self.assertEqual([(r["command"], r["result"]) for r in recs],
+                         [("dry-run", "ok"), ("apply", "started"), ("apply", "ok"), ("verify", "rejected")])
         self.assertEqual(recs[-1]["gate_failed"], ["G-5"])
         self.assertEqual(audit.verify_chain(), [])
         self.assertTrue(all(stat.S_IMODE(os.stat(audit.log_path()).st_mode) == 0o600 for _ in [0]))

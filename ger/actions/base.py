@@ -177,10 +177,55 @@ def move_in(rt: Runtime, res: Resolved, kind: str, expect_ident, digest: str, tr
         os.close(efd)
 
 
+def _payload_ident(efd: int):
+    try:
+        pst = os.stat("payload", dir_fd=efd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return [pst.st_dev, pst.st_ino]
+
+
+def _move_state(u: dict) -> str:
+    """State of the object of move record u: "not_moved", "moved" (in the store) or "restored" (back at the original
+    location, for example by a rollback killed before it was journaled). ActionError for any other state.
+
+    Stage "entry" is noted before the rename, so a process killed right after the rename leaves "entry" with the object
+    already in the store: the payload itself decides then."""
+    try:
+        efd = store.open_entry(u["qid"])
+    except FileNotFoundError:
+        if u["stage"] == "entry":
+            return "not_moved"
+        raise ActionError(f"the quarantine store entry {u['qid']} is missing") from None
+    try:
+        pid = _payload_ident(efd)
+    finally:
+        os.close(efd)
+    res = fsutil.resolve(u["orig"], must_exist=False)
+    try:
+        orig = None if res.st is None else [res.st.st_dev, res.st.st_ino]
+    finally:
+        res.close()
+    if pid == list(u["ident"]):
+        if orig is not None:
+            raise ActionError(f"cannot restore: something else is at the original location: {u['orig']}")
+        return "moved"
+    if pid is None and (u["stage"] == "entry" or orig == list(u["ident"])):
+        return "not_moved" if u["stage"] == "entry" else "restored"
+    raise ActionError(f"cannot restore: the quarantined object {u['qid']} is missing or was replaced")
+
+
+def check_move(u: dict) -> None:
+    """ActionError unless move_out(u) would put back exactly what GER moved (and nothing else is at the original location)."""
+    _move_state(u)
+
+
 def move_out(u: dict, verify_digest: bool = False) -> None:
     """Reverse of move_in. Checks that the original location is free, then restores the mode and moves it back with rename."""
-    if u["stage"] == "entry":
+    if u["stage"] == "entry" and _move_state(u) == "not_moved":
         return  # Not moved yet
+    if u["stage"] != "entry" and _move_state(u) == "restored":
+        return  # Already back
     efd = store.open_entry(u["qid"])
     try:
         res = fsutil.resolve(u["orig"], must_exist=False)
@@ -271,13 +316,80 @@ def rt_is_root() -> bool:
     return os.geteuid() == 0
 
 
+def _edit_state(u: dict, res: Resolved) -> str:
+    """State of the target of edit record u: "not_replaced", "replaced" (holds what GER wrote) or "restored" (the backup
+    is back, for example by a rollback killed before it was journaled). ActionError for any other state.
+
+    Stages before "replaced" are noted before the rename of the temporary file, so a process killed right after it
+    leaves "linked": then the temporary file is gone and the target is another i-node with the content GER wrote."""
+    stage = u.get("stage")
+    cur = None if res.st is None else [res.st.st_dev, res.st.st_ino]
+    if stage in ("start", "tmp", "linked"):
+        if stage != "linked" or cur is None or cur == list(u["ident"]):
+            return "not_replaced"
+        try:
+            os.stat(u["tmp"], dir_fd=res.parent_fd, follow_symlinks=False)
+            return "not_replaced"
+        except FileNotFoundError:
+            pass
+    efd = store.open_entry(u["qid"])
+    try:
+        pid = _payload_ident(efd)
+    finally:
+        os.close(efd)
+    if cur is None:
+        raise ActionError(f"the edited file is missing: {u['target']}")
+    if pid is None and cur == list(u["ident"]) and stage not in ("start", "tmp", "linked"):
+        if fsutil.hash_file(res.parent_fd, res.name, res.st) == u["before_sha256"]:
+            return "restored"
+    if "new_ident" in u and cur != list(u["new_ident"]):
+        raise ActionError("cannot restore: the edited file was replaced")
+    if not stat.S_ISREG(res.st.st_mode) or fsutil.hash_file(res.parent_fd, res.name, res.st) != u["after_sha256"]:
+        raise ActionError("cannot restore: the edited file changed from the content GER wrote")
+    if pid != list(u["ident"]):
+        raise ActionError("the backup in the quarantine store was replaced")
+    return "replaced"
+
+
+def check_edit(u: dict) -> None:
+    """ActionError unless unreplace_file(u) would restore the file from before the edit over exactly what GER wrote."""
+    res = fsutil.resolve(u["target"], must_exist=False)
+    try:
+        _edit_state(u, res)
+    finally:
+        res.close()
+
+
+def _drop_stale_backup_link(u: dict, res: Resolved) -> None:
+    """A process killed between the backup hard link and the replacement leaves a second name of the unchanged target in
+    the store (st_nlink 2, which GER itself refuses later). Only that extra name is removed; the content stays at the
+    target, so nothing is deleted."""
+    if res.st is None or [res.st.st_dev, res.st.st_ino] != list(u["ident"]):
+        return
+    try:
+        efd = store.open_entry(u["qid"])
+    except FileNotFoundError:
+        return
+    try:
+        if _payload_ident(efd) == list(u["ident"]):
+            try:
+                os.stat("manifest.json", dir_fd=efd, follow_symlinks=False)
+            except FileNotFoundError:
+                os.unlink("payload", dir_fd=efd)
+    finally:
+        os.close(efd)
+
+
 def unreplace_file(u: dict) -> None:
     """Reverse of replace_file. Checks that the current file is what GER wrote (after_sha256), then
     keeps the edited file in the quarantine store (hard link) and moves the backup back with rename. Deletes nothing."""
     stage = u.get("stage")
     res = fsutil.resolve(u["target"], must_exist=False)
     try:
-        if stage in ("start", "tmp", "linked"):
+        state = _edit_state(u, res)
+        if state == "restored":
+            return
+        if state == "not_replaced":
             # Not replaced yet. Clean up only the temporary file (created by GER)
             try:
                 tst = os.stat(u["tmp"], dir_fd=res.parent_fd, follow_symlinks=False)
@@ -285,19 +397,10 @@ def unreplace_file(u: dict) -> None:
                     os.unlink(u["tmp"], dir_fd=res.parent_fd)
             except FileNotFoundError:
                 pass
+            _drop_stale_backup_link(u, res)
             return
         efd = store.open_entry(u["qid"])
         try:
-            if res.st is None:
-                raise ActionError(f"the edited file is missing: {u['target']}")
-            if "new_ident" in u and [res.st.st_dev, res.st.st_ino] != list(u["new_ident"]):
-                raise ActionError("cannot restore: the edited file was replaced")
-            cur = fsutil.hash_file(res.parent_fd, res.name, res.st)
-            if cur != u["after_sha256"]:
-                raise ActionError("cannot restore: the edited file changed from the content GER wrote")
-            pst = os.stat("payload", dir_fd=efd, follow_symlinks=False)
-            if [pst.st_dev, pst.st_ino] != list(u["ident"]):
-                raise ActionError("the backup in the quarantine store was replaced")
             unlock_payload(efd, "file", u["mode"], None)
             try:
                 os.link(res.name, "replaced", src_dir_fd=res.parent_fd, dst_dir_fd=efd, follow_symlinks=False)
@@ -327,6 +430,15 @@ def rollback_undo(undo: dict) -> None:
     elif "entries" in undo:
         for u in reversed(undo["entries"]):
             move_out(u)
+
+
+def check_undo(undo: dict) -> None:
+    """ActionError unless rollback_undo(undo) would undo exactly GER's change (ger recover checks every step first)."""
+    if undo.get("op") == "edit":
+        check_edit(undo)
+    elif "entries" in undo:
+        for u in undo["entries"]:
+            check_move(u)
 
 
 def check_regular(st, what="the target"):

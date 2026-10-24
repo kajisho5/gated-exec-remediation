@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Round 5 fixes
+
+- **A killed apply, a second apply and `ger recover` could undo a committed remediation.** A killed apply wrote no audit record, so its dry-run record stayed unused and a second apply with the same input ran (items the first one had done were `already_compliant`). `ger recover` then replayed the first run's journal, moved the quarantined files back and restored the removed MCP servers, and still reported OK. Now apply appends a start record (`command: "apply"`, `result: "started"`, `run_id`) under the log lock before its first change, which uses up the dry-run record (G-8); verify, dry-run and apply are rejected (G-8) while the quarantine store holds an unfinished journal, naming its run and plan; and `ger recover` closes a journal as `superseded` without replaying it when the audit log shows a later apply or restore, and undoes nothing unless every step can be undone exactly (the quarantined object still in the store and its original place free, the edited file still holding GER's bytes, the chmod target still GER's mode). Kill points between a change and its journal line are read from the file system (a chmod intent is now journaled before the change; a stale backup hard link is removed so the target does not keep `st_nlink` 2). If recover itself cannot record in the audit log after a usage error, the exit code is 64 rather than 5 (nothing changed). Design §3.1 describes the behaviour; `TestKillPoints` kills apply right after each of its 77 file-system changes and fsyncs, then checks retry, recover, a new dry-run + apply and the audit chain.
+
+### 日本語（round 5 の修正）
+
+- **強制終了された apply・2 回目の apply・`ger recover` の順で、確定した修復が元に戻ることがあった。** 強制終了された apply は監査ログに記録を書かないため dry-run 記録が未使用のまま残り、同じ入力の 2 回目の apply が実行された（1 回目が済ませた item は `already_compliant`）。その後の `ger recover` が 1 回目のジャーナルを再生して、隔離したファイルを戻し、取り除いた MCP サーバーを復元し、それでも OK と報告していた。apply は最初の変更の前に、ログのロックの下で開始の記録（`command: "apply"`、`result: "started"`、`run_id`）を追記し、これで dry-run 記録が使用済みになる（G-8）。隔離ストアに未完了のジャーナルがある間は verify・dry-run・apply を G-8 で拒否し、その実行と計画を示す。`ger recover` は、監査ログに後の apply か restore があればジャーナルを再生せず `superseded` として閉じ、すべてのステップを正確に元に戻せるとき（隔離した物がストアにあり元の場所が空いている、編集したファイルが GER の書いたバイト列のまま、chmod の対象が GER の mode のまま）だけ元に戻す。変更とそのジャーナルの行の間で落ちた場合はファイルシステムから状態を読む（chmod の意図を変更の前にジャーナルに書くようにした。古いバックアップのハードリンクは、対象が `st_nlink` 2 のまま残らないよう外す）。引数エラーの後に監査ログへ記録できなかった場合の終了コードは 5 ではなく 64（何も変えていない）。設計 §3.1 に動作を書いた。`TestKillPoints` は apply をファイルシステムの変更と fsync の 77 か所それぞれの直後で止め、再実行・recover・新しい dry-run と apply・監査ログのチェーンを確かめる
+
 ### English-first
 
 GER is now English-first, following ZES 0.5.0. Every message a person reads is English: gate rejection reasons, action errors, `ger preview` summaries and reports, CLI output and help, remediation-log `reason` texts and the test harness output. Behaviour does not change apart from the language of these strings.
