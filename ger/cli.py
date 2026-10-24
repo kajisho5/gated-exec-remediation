@@ -35,7 +35,7 @@ from pathlib import Path
 import copy
 import json
 
-from . import audit, executor, fsutil, store
+from . import audit, executor, fsutil, runlock, store
 from . import restore as restore_mod
 from .actions import FS_CHANGING, REGISTRY
 from .actions import edit_common
@@ -245,6 +245,28 @@ def main(argv: list[str] | None = None) -> int:
         _err(f"ger: {e} (not running because nothing could be recorded)")
         return EXIT_USAGE
 
+    lock = runlock.RunLock()
+    if args.command in ("apply", "restore", "recover"):
+        # Held until the final audit record is written: the G-8 check for an open journal, the journal creation and
+        #   every change of this run cannot interleave with another apply / restore / recover (runlock)
+        try:
+            lock.acquire()
+        except runlock.Busy as e:
+            busy = str(e)
+        except OSError as e:
+            _err(f"ger: cannot take the run lock ({e}) (nothing changed)")
+            return EXIT_USAGE
+        else:
+            busy = None
+    else:
+        busy = None
+    try:
+        return _main_locked(args, now, ttl, max_age, busy)
+    finally:
+        lock.release()
+
+
+def _main_locked(args, now, ttl, max_age, busy) -> int:
     clock = (lambda: now) if args.now else now_utc
     record = {"command": args.command, "operator": args.operator, "started_at": fmt_ts(clock())}
     if args.now:  # A dry-run record made with --now never justifies an apply without --now (G-8)
@@ -257,6 +279,11 @@ def main(argv: list[str] | None = None) -> int:
         _err(f"ger: cannot read the input: {e}")
         inp = None
         st.update(code=EXIT_REJECTED, rejections=[Rejection("G-1", f"cannot read the input as JSON: {e}")])
+    if busy is not None and inp is not None:
+        if args.command != "restore":
+            _plan_record(inp, record)
+        inp = None
+        st.update(code=EXIT_REJECTED, rejections=[Rejection("G-8", f"{busy}: wait until it has finished, then run this again")])
     pool = fsutil.FdPool()
     if inp is not None:
         try:
