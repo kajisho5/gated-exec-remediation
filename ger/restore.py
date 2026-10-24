@@ -77,12 +77,13 @@ class RestoreStep:
     def target(self):
         return self.m["original_path"]
 
-    def _payload_hash(self, efd: int, pst) -> str:
-        """Hash of the quarantined object as the manifest's "hash" (before quarantine) or "locked_hash" means it."""
+    def _payload_hash(self, efd: int, pst, name: str = "payload") -> str:
+        """Hash of the quarantined object (name in the directory efd: the payload in the store entry, or the object back
+        at its original location) as the manifest's "hash" (before quarantine) or "locked_hash" means it."""
         m = self.m
         k = m["kind"]
         if k == "file":
-            return fsutil.hash_file(efd, "payload", pst)
+            return fsutil.hash_file(efd, name, pst)
         if k == "tree":
             orig, kinds = m.get("tree_modes"), m.get("tree_kinds")
             if isinstance(orig, dict) and isinstance(kinds, dict) and set(orig) <= set(kinds):
@@ -90,9 +91,37 @@ class RestoreStep:
                 #   modes before the rename, member by member); the content and the structure must be the original
                 locked = fsutil.locked_modes(kinds)
                 hm = {rel: ({mode, locked.get(rel, mode)}, mode) for rel, mode in orig.items()}
-                return fsutil.tree_hash(efd, "payload", pst.st_dev, hash_modes=hm).hash
-            return fsutil.tree_hash(efd, "payload", pst.st_dev).hash
-        return "link:" + fsutil.readlink(efd, "payload")
+                return fsutil.tree_hash(efd, name, pst.st_dev, hash_modes=hm).hash
+            return fsutil.tree_hash(efd, name, pst.st_dev).hash
+        return "link:" + fsutil.readlink(efd, name)
+
+    def _check_back(self) -> None:
+        """The object an interrupted restore moved back (state "moved") must still be what the manifest describes: the
+        same i-node is not enough, since its content can be changed in place (or the payload moved back by hand and
+        changed). The same rule as for the payload in the store: content and structure as the manifest hash, each
+        member with its original or its locked mode; for an edit, the backup content (the file before the edit)."""
+        m = self.m
+        tamper = "the object back at the original location does not match the manifest hash (possible tampering)"
+        res = fsutil.resolve(m["original_path"])
+        try:
+            st = res.st
+            if [st.st_dev, st.st_ino] != list(m["ident"]):
+                raise ActionError("the object at the original location is not the one GER quarantined")
+            kind = "file" if m["operation"] == "edit_backup" else m["kind"]
+            if fsutil.kind_of(st) != kind:
+                raise ActionError(tamper)
+            if kind == "file":
+                if st.st_mode & 0o7777 not in (m["mode"], 0o400) or st.st_nlink != 1:
+                    raise ActionError(tamper)
+                got = fsutil.hash_file(res.parent_fd, res.name, st)
+                ok = (m["hash"],) if m["operation"] == "edit_backup" else (m["hash"], m.get("locked_hash", m["hash"]))
+            else:
+                got = self._payload_hash(res.parent_fd, st, res.name)
+                ok = (m["hash"], m.get("locked_hash", m["hash"]))
+            if got not in ok:
+                raise ActionError(tamper)
+        finally:
+            res.close()
 
     def _back_in_place(self, efd: int) -> bool:
         """True if the object GER quarantined (or the backup of an edit) is at its original location again, by a rename
@@ -145,6 +174,7 @@ class RestoreStep:
                 except FileNotFoundError:
                     pass
                 if self._back_in_place(efd):
+                    self._check_back()  # Never recorded as restored without checking what is there
                     self.state = "moved"
                     return
                 raise ActionError("the quarantined object is neither in the quarantine store nor back at its original "
@@ -190,8 +220,11 @@ class RestoreStep:
             res.close()
 
     def apply(self) -> None:
-        if self.state in ("moved", "done"):
-            return  # Already back (an interrupted restore of this request)
+        if self.state == "done":
+            return  # Already recorded by an interrupted run of this request
+        if self.state == "moved":
+            self._check_back()  # Already back (an interrupted restore): checked again right before it is recorded
+            return
         m = self.m
         efd = store.open_entry(self.qid)
         try:
