@@ -374,7 +374,10 @@ def check_gates(inp, operator: str, now: dt.datetime, command: str, dry_run_ttl:
         return [Rejection("G-2", "the plan was made by ZET with --now (time override for tests) (now_override: true). "
                                  "It is accepted only when GER_ALLOW_NOW_OVERRIDE=1")], []
     dues = [parse_ts(it["due_at"]) for it in plan["items"] if it["decision"] == "remediate" and it["due_at"] is not None]
-    if dues and now > max(dues):
+    # recover is never refused for expiry (as for the approval age below): it applies nothing new, it only returns the
+    #   targets of an interrupted apply to their state before that apply (or completes that apply's own rollback). Refusing
+    #   it would leave a journal that no later plan can close (G-8 refuses every plan while it is open)
+    if dues and now > max(dues) and command != "recover":
         return [Rejection("G-2", f"the plan has expired (past the latest remediate due_at {max(dues).strftime('%Y-%m-%dT%H:%M:%SZ')}). "
                                  "Decide again with ZET")], []
 
