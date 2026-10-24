@@ -510,6 +510,49 @@ class TestEdits(R):
                                                "file_sha256": fhash(good), "expected_after_sha256": sha256(b"")}
         self.rejected(self.rehash(bad), "G-10", "H")
 
+    def test_toml_mcp_servers_not_a_table_is_refused_not_a_crash(self):
+        # [[mcp_servers]] (ZES reports /mcp_servers/0), an inline array or a plain value: that item is refused with a
+        # reason (exit 3), and the other items of the plan are still previewed
+        m = self.mcp()
+        c = self.root / ".codex" / "config.toml"
+        c.parent.mkdir()
+        for body, what in (('[[mcp_servers]]\ncommand = "curl"\nargs = ["https://x.invalid"]\n', "an array"),
+                           ('mcp_servers = [{command = "curl"}]\n', "an array"), ('mcp_servers = "curl"\n', "a value")):
+            c.write_text(body)
+            self.preview(self.plan([self.item({"type": "disable_mcp_server", "target": str(c), "params": {"select": "mcp.server"}}, i=1),
+                                    self.item({"type": "disable_mcp_server", "target": str(m), "params": {"select": "mcp.server"}}, i=2)]),
+                         expect=3)
+            rep = {r["finding_ids"][0]: r for r in json.loads((self.d / "pv-report.json").read_text())["items"]}
+            self.assertEqual(rep[fid(1)]["status"], "rejected")
+            self.assertIn(f"mcp_servers is {what}", rep[fid(1)]["reason"])
+            self.assertIn("nothing GER can remove automatically", rep[fid(1)]["reason"])
+            self.assertEqual(rep[fid(2)]["status"], "ok")
+            pv = json.loads((self.d / "pv.json").read_text())
+            self.assertIn("ops", pv["items"][1]["action"]["params"])
+
+    def test_utf8_bom_toml_and_json_are_remediable(self):
+        # The BOM is kept byte for byte (Codex's toml crate skips a leading BOM); the rest is edited and T-3 holds
+        import tomllib
+        c = self.root / ".codex" / "config.toml"
+        c.parent.mkdir()
+        c.write_bytes(b'\xef\xbb\xbf[mcp_servers.evil]\ncommand = "curl"\nargs = ["https://x.invalid"]\n'
+                      b'[mcp_servers.ok]\ncommand = "/bin/inert"\n')
+        m = self.mcp(body='﻿{\n  "mcpServers": {\n    "evil": { "command": "curl" },\n    "ok": { "command": "ls" }\n  }\n}\n')
+        self.assertTrue(m.read_bytes().startswith(b"\xef\xbb\xbf"))
+        p = self.preview(self.plan([self.item({"type": "disable_mcp_server", "target": str(c), "params": {"select": "mcp.server"}}),
+                                    self.item({"type": "disable_mcp_server", "target": str(m), "params": {"select": "mcp.server"}})]))
+        self.assertEqual(p["items"][0]["action"]["params"]["ops"][0]["key_path"], ["mcp_servers", "evil"])
+        self.run_plan(p)
+        self.assertEqual(c.read_bytes(), b'\xef\xbb\xbf[mcp_servers.ok]\ncommand = "/bin/inert"\n')
+        self.assertEqual(tomllib.loads(c.read_text(encoding="utf-8-sig")), {"mcp_servers": {"ok": {"command": "/bin/inert"}}})
+        self.assertTrue(m.read_bytes().startswith(b"\xef\xbb\xbf"))
+        self.assertEqual(json.loads(m.read_text(encoding="utf-8-sig")), {"mcpServers": {"ok": {"command": "ls"}}})
+        # A BOM file whose first table is the only one removed keeps just the BOM
+        c.write_bytes(b'\xef\xbb\xbf[mcp_servers.evil]\ncommand = "curl"\n')
+        p = self.preview(self.plan([self.item({"type": "edit_toml", "target": str(c), "params": {"select": "mcp.server"}})]))
+        self.run_plan(p)
+        self.assertEqual(c.read_bytes(), b"\xef\xbb\xbf")
+
     def test_remove_line_crlf_bom_and_context(self):
         rc = self.root / ".bashrc"
         rc.write_bytes(b"\xef\xbb\xbfexport LD_PRELOAD=/tmp/.lib/x.so\r\n# ok\r\nexport PATH=/usr/bin\r\n")
@@ -909,6 +952,17 @@ class TestRollbackRecoverTamper(R):
         self.assertIn("cannot be replayed safely", e)
         self.assertEqual(dict(self.state(paths), m=mid["m"]), mid)  # Nothing else was rolled back
         self.assertEqual(len(store.open_journals()), 1)
+
+    def test_restore_g9_message_has_the_prefix_once(self):
+        f = self.root / "x.js"
+        f.write_text("evil()")
+        self.run_plan(self.preview(self.plan([self.item({"type": "quarantine", "target": str(f), "params": {}})])))
+        with mock.patch.dict(os.environ, {"HOME": str(f) + "/sub"}):  # The original path is now above $HOME (protected)
+            c, e = self.restore(dry_expect=3)
+        line = next(x for x in e.splitlines() if "G-9" in x)
+        self.assertEqual(line.count("G-9"), 1, line)
+        self.assertRegex(line.strip(), r"^G-9: \S+/001: the restore destination is protected")
+        self.assertEqual(audit.records()[-1]["gate_failed"], ["G-9"])
 
     def test_tampered_store_blocks_restore(self):
         f = self.root / "a.js"
