@@ -15,7 +15,8 @@
   ger verify-log [LOG]   verifies the hash chain of the audit log (read only; not recorded in the audit log)
 
 Exit codes: 0=success / 3=rejected by a gate (nothing changed) / 4=failed and rolled back /
-           5=rollback also failed, or remediation-log could not be written after applying (manual action required) /
+           5=rollback also failed, remediation-log could not be written after applying, or an error after the commit point
+             (the changes stay; manual action required) /
            64=argument or environment error / 70=internal error (verify-log: 0=intact / 3=broken / 64=no log)
 Environment: GER_LOG_DIR (audit log; resolved to a real path at startup), GER_DRYRUN_TTL (validity of a dry-run record in seconds, default 86400),
          GER_APPROVAL_MAX_AGE (validity of an approval in seconds, default 604800),
@@ -285,6 +286,17 @@ def _main_locked(args, now, ttl, max_age, busy) -> int:
         inp = None
         st.update(code=EXIT_REJECTED, rejections=[Rejection("G-8", f"{busy}: wait until it has finished, then run this again")])
     pool = fsutil.FdPool()
+    if inp is not None and args.command in ("dry-run", "apply", "restore", "recover"):
+        # Read GER's own output schema before any change, so nothing of GER's installation has to be read after the
+        #   commit point (_finish checks the remediation-log against it)
+        try:
+            validator("remediation-log.schema.json")
+        except Exception as e:  # noqa: BLE001 (nothing changed yet: fail closed)
+            _err(f"ger: internal error: cannot read the remediation-log schema ({type(e).__name__}: {str(e)[:200]}) "
+                 "(nothing changed)")
+            record["error"] = "cannot read the remediation-log schema"
+            st["code"] = EXIT_INTERNAL
+            inp = None
     if inp is not None:
         try:
             handler = {"preview": _cmd_preview, "restore": _cmd_restore, "confirm": _cmd_confirm,
@@ -292,10 +304,32 @@ def _main_locked(args, now, ttl, max_age, busy) -> int:
             handler(args, inp, now, clock, ttl, max_age, record, st, pool)
         except Exception as e:  # Anything unexpected fails closed
             _err(f"ger: internal error: {type(e).__name__}: {str(e)[:200]}")
-            st["code"] = EXIT_INTERNAL
+            if st["changed"]:
+                # After the commit point (or after a rollback that failed): the changes stay in place. The run is still
+                #   recorded (remediation-log if it was built, and the final audit record) and ends with 5 (manual check)
+                _post_commit_error(st, f"{type(e).__name__}: {e}")
+            else:
+                st["code"] = EXIT_INTERNAL
         finally:
             pool.close()
-    return _finish(args, record, st, clock)
+    try:
+        return _finish(args, record, st, clock)
+    except Exception as e:  # noqa: BLE001 (last resort: never an uncaught traceback, never exit 1)
+        _err(f"ger: internal error while recording the result: {type(e).__name__}: {str(e)[:200]}")
+        return EXIT_ROLLBACK_FAILED if st["changed"] else EXIT_INTERNAL
+
+
+def _post_commit_error(st: dict, why: str) -> None:
+    """An error after GER changed the tree (the commit point of an apply, or a restore / recover that changed things).
+    The tree is left as it is (an apply's journal is already closed by its commit record); the run ends with exit code 5
+    and, when everything had been applied, the audit result applied_unverified."""
+    st["post_commit_error"] = why[:300]
+    if st["code"] in (EXIT_OK, EXIT_INTERNAL):
+        st["code"] = EXIT_ROLLBACK_FAILED
+    if st["outcome"] is None and st["result"] is None:
+        st["result"] = "applied_unverified"
+    st["msg"] = ("GER failed after its changes were made (" + why[:200] + "). The changes stay in place; check "
+                 "remediation-log (if it was written), the audit log and the targets")
 
 
 def _finish(args, record: dict, st: dict, clock) -> int:
@@ -310,16 +344,30 @@ def _finish(args, record: dict, st: dict, clock) -> int:
         record["gate_failed"] = sorted({r.gate for r in rejections})
     out_obj = st["out_obj"] if st["out_obj"] is not None else log_obj
     if log_obj is not None:
-        errs = validator("remediation-log.schema.json").errors(log_obj)
+        try:
+            errs = validator("remediation-log.schema.json").errors(log_obj)
+        except Exception as e:  # noqa: BLE001 (the check itself failed: the output is still written and recorded)
+            errs = []
+            why = f"cannot check the output against the remediation-log schema ({type(e).__name__}: {str(e)[:200]})"
+            _err(f"ger: {why}")
+            record["output_unchecked"] = why
+            if changed:
+                st.update(code=code, outcome=outcome, result=result)
+                _post_commit_error(st, why)
+                code, result = st["code"], st["result"]
+            elif code == EXIT_OK:
+                code = EXIT_INTERNAL
         if errs:  # Fail closed also when our own output breaks the contract
             _err(f"ger: output does not conform to the remediation-log schema: {errs[0]}")
             code = EXIT_INTERNAL if code == EXIT_OK else code
+    if st.get("post_commit_error"):
+        record["post_commit_error"] = st["post_commit_error"]
     if out_obj is not None:
         # Written before the audit log. If it cannot be written, output_hash is not recorded and the run is not recorded as ok
         try:
             write_atomic(args.output, out_obj)
             record["output_hash"] = sha256(canonical(out_obj))
-        except OSError as e:
+        except Exception as e:  # noqa: BLE001 (OSError, or anything else after the commit point)
             _err(f"ger: cannot write the output ({e})")
             unlogged = changed
             _remove_stale_output(args.output)
@@ -336,7 +384,7 @@ def _finish(args, record: dict, st: dict, clock) -> int:
     record.update({"finished_at": fmt_ts(clock()), "result": result})
     try:
         audit.append(record)
-    except OSError as e:
+    except Exception as e:  # noqa: BLE001 (OSError, or anything else after the commit point)
         _err(f"ger: cannot record in the audit log ({e})")
         # apply may already have changed things, so this requires manual action
         mutating = args.command in ("apply", "restore", "recover")
@@ -401,9 +449,10 @@ def _cmd_plan(args, inp, now, clock, ttl, max_age, record, st, pool):
         results, outcome = executor.apply(inp["plan"], steps, clock, run_id=run_id, plan_hash=record.get("plan_hash"),
                                           input_hash=record.get("input_hash"))
         status = "error" if outcome else ("partial" if inp["plan"]["status"] == "partial" else "ok")
+        # The outcome first: whatever fails after this point is an error after the commit point (_post_commit_error)
         st.update(outcome=outcome, changed=outcome in (None, executor.ROLLBACK_FAILED),
-                  log_obj=_log(inp, "apply", record["started_at"], clock(), results, status),
                   code={None: EXIT_OK, executor.ROLLED_BACK: EXIT_ROLLED_BACK}.get(outcome, EXIT_ROLLBACK_FAILED))
+        st["log_obj"] = _log(inp, "apply", record["started_at"], clock(), results, status)
         if outcome == executor.JOURNAL_FAILED:
             # Exit 5: the journal may still look unfinished (its last records could not be written), so ger recover is
             #   part of the way back even though nothing GER changed is left in place
