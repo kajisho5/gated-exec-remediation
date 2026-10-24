@@ -4,9 +4,9 @@
       "path": "schemas/vendor/remediation-plan.schema.json",
       "source_repo": "kajisho5/zero-exec-triage",
       "source_path": "schemas/remediation-plan.schema.json",
-      "source_commit": "7bc8f002bfe6960b0225e3ba6d6e05c0c9b6d1f5",
+      "source_commit": "649e208a986aeb3d4af3741e3987efecf4030e3f",
       "schema_version": "1.1",
-      "sha256": "46c8ee3ceac3a760e17ae3ba8e91bd78c448cd4558ea4c45dcc66d55fd0a1619"
+      "sha256": "7839acbf35bd281972864cf35266f7497c67f748a08591bb9c73bfac3ee7e7f3"
     },
     {
       "path": "ger/jsonschema_lite.py",

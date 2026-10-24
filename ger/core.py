@@ -141,6 +141,14 @@ def write_atomic(path: str, obj: Any) -> None:
         raise
 
 
+def reason_text(e: BaseException) -> str:
+    """The reason shown for a refused item. Text that cannot be encoded (a UnicodeError from a value that is not valid
+    Unicode) gets a fixed reason instead of the codec's message."""
+    if isinstance(e, UnicodeError):
+        return "the target holds text that is not valid Unicode, so GER does not edit it (remove the entry by hand)"
+    return str(e)
+
+
 _validators: dict[str, Validator] = {}
 
 

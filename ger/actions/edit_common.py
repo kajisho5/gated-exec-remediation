@@ -38,6 +38,37 @@ def merged_ops(items: list[Item], key: str = "ops") -> list:
     return out
 
 
+# Operations whose items may carry action.locators (the JSON pointers of the finding's locators, set by ZET)
+LOCATOR_TYPES = ("edit_json", "edit_toml", "disable_mcp_server")
+
+
+def op_pointer(o: dict) -> str | None:
+    """The JSON pointer an op removes or replaces (a TOML key path as /key/key, escaped like a JSON pointer)."""
+    if isinstance(o.get("pointer"), str):
+        return o["pointer"]
+    kp = o.get("key_path")
+    if isinstance(kp, list) and kp:
+        return "/" + "/".join(str(k).replace("~", "~0").replace("/", "~1") for k in kp)
+    return None
+
+
+def uncovered_locators(action: dict, ops: list) -> list[str]:
+    """The locators of the item that the edit does not remove: a locator is covered when an op removes or replaces the
+    value at that pointer or a container of it. An item without locators (a finding that names no location, or a plan
+    of an earlier ZET) gives [] (GER cannot tell, as before)."""
+    locs = action.get("locators")
+    if not isinstance(locs, list):
+        return []
+    ptrs = [p for p in (op_pointer(o) for o in ops if isinstance(o, dict)) if p is not None]
+    return [x for x in locs if not any(x == p or (isinstance(x, str) and x.startswith(p + "/")) for p in ptrs)]
+
+
+def locator_reason(miss: list[str]) -> str:
+    shown = ", ".join(miss[:3]) + (f" and {len(miss) - 3} more" if len(miss) > 3 else "")
+    return (f"the edit does not remove what this finding reports (its locators {shown} stay), so it cannot be recorded as "
+            "applied. Decide it as a checklist")
+
+
 class EditStep(Step):
     order = 0
 

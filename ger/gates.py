@@ -22,8 +22,9 @@ from collections import Counter
 from . import audit, fsutil, hazards, store
 from .actions import FS_CHANGING, REGISTRY
 from .actions import checklist as checklist_mod
+from .actions import edit_common
 from .actions.base import ActionError, Ctx, Item
-from .core import ROOT, RISKY_EFFECTS, Rejection, input_hash, parse_ts, plan_hash, validator
+from .core import ROOT, RISKY_EFFECTS, Rejection, input_hash, parse_ts, plan_hash, reason_text, validator
 
 EVIDENCE_FULL_HASH_MAX = 104857600  # Same as ZES: up to 100MB the SHA-256 of the content, above that the SHA-256 of path, size and mtime
 MAX_REMEDIATE_ITEMS = 256
@@ -176,6 +177,8 @@ def _zet_invariants(plan: dict, now: dt.datetime) -> list[Rejection]:
                     bad("I-4", "only checklist actions may have a null target", fid)
             elif a["type"] != "chmod" and a["type"] in REGISTRY:
                 bad("I-4", f"plan 1.0 can only execute chmod ({a['type']} requires plan 1.1)", fid)
+            if "locators" in a and a["type"] not in edit_common.LOCATOR_TYPES:
+                bad("I-4", f"action.locators is only for {' / '.join(edit_common.LOCATOR_TYPES)}", fid)
             if a["type"] == checklist_mod.TYPE and "followup" in a:
                 bad("I-4", "a checklist action cannot have followup (put the steps in params.steps)", fid)
             for fu in a.get("followup", []):
@@ -584,6 +587,15 @@ def _prepare_all(plan: dict, items: list[dict], approvers: set, pool: fsutil.FdP
             items_ = [Item(it["finding_id"], it["action"], it["approved_by"], i, it.get("level_effective", ""))
                       for i, it in grp]
             step = mod.prepare(ctx, items_)
+            if a0["type"] in edit_common.LOCATOR_TYPES:
+                # An item is applied only when the edit removes what its finding reports (round 7 F4): the group's ops
+                #   are chosen for the whole file, so an item whose finding names other locations would be recorded as
+                #   applied while its finding stays. Refused before any change (fail closed)
+                ops = edit_common.merged_ops(items_)
+                for x in items_:
+                    miss = edit_common.uncovered_locators(x.action, ops)
+                    if miss:
+                        rej.append(Rejection("G-10", edit_common.locator_reason(miss), x.finding_id))
             if a0["type"] in FS_CHANGING and not step.noop:
                 for it in grp:
                     check_evidence(it[1]["action"])
@@ -604,7 +616,7 @@ def _prepare_all(plan: dict, items: list[dict], approvers: set, pool: fsutil.FdP
         except fsutil.FsError as e:
             rej.append(Rejection("G-7", str(e), fid))
         except (ActionError, OSError, ValueError) as e:  # ValueError: a NUL character in the path and so on
-            msg = str(e)
+            msg = reason_text(e)
             # Only a fixed prefix or the gate set where the error is raised decides the gate: the message can contain
             #   names from the scanned content (a server name, a RECORD path)
             gate = msg[:3] if msg.startswith(("G-6:", "G-9:")) else "G-7"

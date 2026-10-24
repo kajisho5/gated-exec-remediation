@@ -75,6 +75,7 @@
         "params": { "type": "object", "description": "The shape per operation is actions.schema.json (owned by GER, copied with a pinned version to schemas/vendor). Drafts allow select (ger preview replaces it with concrete values)" },
         "reversible": { "type": "boolean", "description": "Determined by ZET from the operation type (A-4). Added by finalize" },
         "skillpact_effects": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/effect" }, "description": "skillpact.declared_effects of the finding (A-4). Added by finalize" },
+        "locators": { "type": "array", "minItems": 1, "maxItems": 1024, "items": { "type": "string", "maxLength": 4096 }, "description": "The JSON pointers of the finding's locators (findings 1.1+, formats json / jsonc / toml; a TOML key path as /key/key), for edit_json / edit_toml / disable_mcp_server only. Set by ZET (draft suggestion and finalize) from the finding. GER records an item as applied only when its edit removes every one of them (the pointer itself or a container of it); otherwise the item is refused (G-10). Absent when the finding has none (then GER cannot tell, as before)" },
         "evidence_hash": { "$ref": "#/$defs/sha256", "description": "For plan 1.0 compatibility (1.1 uses evidence). The finding's evidence_hash (ZES rule: SHA-256 of the contents for a regular file of 100 MB or less, SHA-256 of path, size and mtime above 100 MB). Added by finalize. GER compares it with the current file in G-7" }
       }
     },

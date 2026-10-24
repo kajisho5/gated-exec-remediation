@@ -38,8 +38,10 @@ import json
 from . import audit, executor, fsutil, store
 from . import restore as restore_mod
 from .actions import FS_CHANGING, REGISTRY
+from .actions import edit_common
 from .actions.base import ActionError, Item
-from .core import Rejection, canonical, fmt_ts, input_hash, load_json, now_utc, plan_hash, sha256, validator, write_atomic
+from .core import (Rejection, canonical, fmt_ts, input_hash, load_json, now_utc, plan_hash, reason_text, sha256, validator,
+                   write_atomic)
 from .gates import _groups, check_gates, in_scope, make_ctx, protected_reason, with_ancestors
 from .jsonschema_lite import safe_text
 
@@ -445,8 +447,23 @@ def _cmd_preview(args, inp, now, clock, ttl, max_age, record, st, pool):
             pr = REGISTRY[a0["type"]].preview(ctx, objs)
             for it in its:
                 it["action"]["params"] = copy.deepcopy(pr.params)
-            report.append({"finding_ids": fids, "type": a0["type"], "target": t, "status": "ok", "summary": pr.summary})
-            _err(f"ger preview: ok   {a0['type']} {t}: {pr.summary}")
+            miss = {}
+            if a0["type"] in edit_common.LOCATOR_TYPES:
+                # Items whose finding names locations this edit does not remove are refused one by one (round 7 F4);
+                #   the others of the group keep the edit (the ops are chosen for the whole file either way)
+                for o in objs:
+                    m = edit_common.uncovered_locators(o.action, pr.params.get("ops", []))
+                    if m:
+                        miss[o.finding_id] = m
+            for fid in [f for f in fids if f in miss]:
+                bad += 1
+                why = edit_common.locator_reason(miss[fid])
+                report.append({"finding_ids": [fid], "type": a0["type"], "target": t, "status": "rejected", "reason": why})
+                _err(f"ger preview: NG   {a0['type']} {t}: {why}")
+            okf = [f for f in fids if f not in miss]
+            if okf:
+                report.append({"finding_ids": okf, "type": a0["type"], "target": t, "status": "ok", "summary": pr.summary})
+                _err(f"ger preview: ok   {a0['type']} {t}: {pr.summary}")
             if args.diff and pr.diff:
                 _err(pr.diff)
         except FileNotFoundError:
@@ -456,9 +473,10 @@ def _cmd_preview(args, inp, now, clock, ttl, max_age, record, st, pool):
             _err(f"ger preview: NG   {a0['type']} {a0['target']}: the target does not exist")
         except (ActionError, fsutil.FsError, OSError, ValueError) as e:
             bad += 1
+            why = reason_text(e)
             report.append({"finding_ids": fids, "type": a0["type"], "target": a0["target"], "status": "rejected",
-                           "reason": str(e)})
-            _err(f"ger preview: NG   {a0['type']} {a0['target']}: {e}")
+                           "reason": why})
+            _err(f"ger preview: NG   {a0['type']} {a0['target']}: {why}")
     st["out_obj"] = out
     record["preview"] = {"ok": len(report) - bad, "rejected": bad}
     if args.report:

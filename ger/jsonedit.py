@@ -14,6 +14,7 @@ import re
 MAX_DEPTH = 64
 _NUM = re.compile(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?")
 _WS = " \t\r\n"
+_SURROGATE = re.compile("[\ud800-\udfff]")
 
 
 class JsonEditError(Exception):
@@ -82,6 +83,10 @@ class _Lexer:
             val = json.loads(raw)
         except ValueError:
             self.err("invalid escape in string")
+        if _SURROGATE.search(val):
+            # json.loads joins a valid pair into one character, so what is left is a lone half (\ud800 alone): not a
+            #   Unicode string, and an edited file would have to keep it as such. GER does not edit such a file
+            self.err("a string holds an unpaired UTF-16 surrogate escape such as \\ud800 (not valid Unicode)")
         self.i = j + 1
         return val, st
 

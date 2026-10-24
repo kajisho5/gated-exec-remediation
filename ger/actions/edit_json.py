@@ -133,7 +133,10 @@ def preview_compute(ctx, items, hids, allowed_h=None):
     try:
         fmt = jsonedit.detect_format(text)
     except jsonedit.JsonEditError as e:
-        raise ActionError(f"cannot parse as JSON / JSONC: {e}") from None
+        # Fail closed: GER edits only a file it parses strictly (no duplicate keys, nesting up to 64, valid Unicode),
+        #   even where an agent's own reader is more lenient; such an entry is removed by hand (a checklist)
+        raise ActionError(f"cannot parse as JSON / JSONC: {e}. GER edits only files it can parse strictly; "
+                          "remove the entry by hand (checklist)") from None
     root = jsonedit.parse(text, fmt == "jsonc")
     value = jsonedit.to_python(root)
     ops = []
