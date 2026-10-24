@@ -251,6 +251,8 @@ Phase 1 で追加したファイル: `ger/fsutil.py`（fd でたどる対象の�
 | remove_line | `sh.ld_preload` / `sh.curl_pipe_sh` / `sh.base64_pipe_sh` / `sh.histfile_null`（シェルの rc）、`git.exec_key`（`fsmonitor` / `sshCommand` / `hooksPath`）、`php.auto_prepend`、`ldso.entry`、`cron.fetch_exec`（`/etc/cron.d/*`）。行の全体が一致すること | — |
 | quarantine | finding の対象そのもの、または §10.3 の関係で導いた対象 | — |
 
+`MCP_DANGER` とフックのパターン `DANGEROUS_CMD` は線形時間の走査（`hazards.mcp_danger` / `hazards.dangerous_cmd`。round 5）で一致を調べる。スキャン対象から来た 1 MB までのファイルを照合するため。先頭のコマンド、その後ろの `-` で始まるトークンの最長の並び（所有的）、バックトラックしない形のフラグの順に調べる。結果は正規表現と同じ（正規表現はコメントと `tests/test_hazards.py` に残し、乱数の入力で比べる）なので、表の版は変えない。
+
 表に無いもの（`permissions.deny`、`.npmrc` の `ignore-scripts=true`、`disable_functions` など）は取り除けない。T-3 は JSON は `json.loads`、JSONC はコメントと末尾カンマを別の経路で除いてから `json.loads`、TOML は `tomllib`、テキストは取り除いた行以外のバイトの一致で確かめる。dry-run と apply の両方で確かめる。
 
 ### 10.3 関係（relation）と G-9

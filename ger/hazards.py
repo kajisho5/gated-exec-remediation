@@ -15,37 +15,110 @@ import re
 HAZARD_VERSION = "ger-hazards-3"
 
 # --- Dangerous command detection ---------------------------------------------------------------
-# For agent hooks (hooks in .claude/settings.json).
-DANGEROUS_CMD = re.compile(
-    r'(^|[\s"/])(curl|wget)([\s"]|$)|bash -c|sh -c|powershell(\.exe)? .*-(e|enc|encodedcommand)\s|node -e|python[0-9.]* -c|base64')
-# For MCP server command + args. Copy of MCP_DANGER_RE from ZES §17 (zes-scan.sh; case-insensitive).
+# Every pattern here is matched in linear time: a file of up to EDIT_MAX_BYTES (1 MB) is read, and its content comes from
+#   the scanned (possibly hostile) tree. Python's backtracking takes quadratic time on (\s+-\S*)*\s+ and on .* followed
+#   by a fixed tail, so those parts are matched by the token scanners below instead of a regular expression, with the
+#   same result as the regular expressions written in the comments (tests/test_hazards.py compares them on a random corpus).
+#
+# For agent hooks (hooks in .claude/settings.json):
+#   DANGEROUS_CMD = (^|[\s"/])(curl|wget)([\s"]|$)|bash -c|sh -c|powershell(\.exe)? .*-(e|enc|encodedcommand)\s|node -e
+#                   |python[0-9.]* -c|base64          (case-sensitive, Unicode \s, as before)
+_HOOK_SIMPLE = re.compile(r'(^|[\s"/])(curl|wget)([\s"]|$)|bash -c|sh -c|node -e|python[0-9.]* -c|base64')
+_HOOK_PS_HEAD = re.compile(r'powershell(\.exe)? ')
+_HOOK_PS_FLAG = re.compile(r'-(e|enc|encodedcommand)\s')
+
+
+def dangerous_cmd(command: str) -> bool:
+    """True if a hook command matches DANGEROUS_CMD (above)."""
+    if _HOOK_SIMPLE.search(command):
+        return True
+    # powershell(\.exe)? .*-(e|enc|encodedcommand)\s: . does not match a newline, so the flag must start on the line of
+    #   the head (its \s may be that newline). Only the first head of each line matters (a later one sees less of the line)
+    line_end = -1
+    for h in _HOOK_PS_HEAD.finditer(command):
+        if h.start() <= line_end:
+            continue
+        line_end = command.find("\n", h.end())
+        if line_end < 0:
+            line_end = len(command)
+        if _HOOK_PS_FLAG.search(command, h.end(), line_end + 1):
+            return True
+    return False
+
+
+# For MCP server command + args. Copy of MCP_DANGER_RE from ZES §17 (zes-scan.sh; POSIX ERE, case-insensitive, C locale):
 #   If ZES reports HIGH but GER does not match, nothing is found to remove and automatic remediation fails (keep both aligned)
-_MCP_OPTS = r'(\s+-\S*)*\s+'
-# re.ASCII: like grep in the C locale, \s is ASCII whitespace only and case folding is ASCII only
-MCP_DANGER = re.compile(
-    r'(^|[\s"/])(curl|wget)([\s"]|$)|base64'
-    r'|(^|[\s"/])(ba|z|da|k|a|fi)?sh(\.exe)?' + _MCP_OPTS + r'-[a-z]*c[a-z]*(\s|$)'
-    r'|(^|[\s"/])(node|nodejs|bun)(\.exe)?' + _MCP_OPTS + r'(-e|--eval|-p|--print)([\s=]|$)'
-    r'|(^|[\s"/])deno(\.exe)?\s+eval(\s|$)'
-    r'|(^|[\s"/])python[0-9.]*(\.exe)?' + _MCP_OPTS + r'-[a-z]*c(\s|$)'
-    r'|(^|[\s"/])(perl|ruby)[0-9.]*(\.exe)?' + _MCP_OPTS + r'-[a-z]*e(\s|$)'
-    r'|(^|[\s"/])php[0-9.]*(\.exe)?' + _MCP_OPTS + r'-r(\s|$)'
-    r'|(^|[\s"/])(osascript|lua[0-9.]*)' + _MCP_OPTS + r'-e(\s|$)'
-    r'|(^|[\s"/])cmd(\.exe)?\s+/[ck](\s|$)',
-    re.IGNORECASE | re.ASCII)
-# ZES branch (pwsh|powershell)(\.exe)?(\s+\S+)*\s+[-/](c|command|...)(\s|$), split in two: Python's backtracking takes
-#   quadratic time on that form ("pwsh " repeated). (\s+\S+)*\s+ is any text that starts and ends with whitespace, so the
-#   branch matches exactly when the first head followed by whitespace has a flag (with its leading whitespace) after it
-_PWSH_HEAD = re.compile(r'(^|[\s"/])(pwsh|powershell)(\.exe)?(?=\s)', re.IGNORECASE | re.ASCII)
-_PWSH_FLAG = re.compile(r'\s[-/](c|command|e|ec|enc|encodedcommand)(\s|$)', re.IGNORECASE | re.ASCII)
+#     (^|[\s"/])(curl|wget)([\s"]|$)|base64
+#     |(^|[\s"/])(ba|z|da|k|a|fi)?sh(\.exe)?          OPTS -[a-z]*c[a-z]*(\s|$)
+#     |(^|[\s"/])(node|nodejs|bun)(\.exe)?           OPTS (-e|--eval|-p|--print)([\s=]|$)
+#     |(^|[\s"/])deno(\.exe)?\s+eval(\s|$)
+#     |(^|[\s"/])python[0-9.]*(\.exe)?               OPTS -[a-z]*c(\s|$)
+#     |(^|[\s"/])(perl|ruby)[0-9.]*(\.exe)?           OPTS -[a-z]*e(\s|$)
+#     |(^|[\s"/])php[0-9.]*(\.exe)?                  OPTS -r(\s|$)
+#     |(^|[\s"/])(osascript|lua[0-9.]*)              OPTS -e(\s|$)
+#     |(^|[\s"/])cmd(\.exe)?\s+/[ck](\s|$)
+#     |(^|[\s"/])(pwsh|powershell)(\.exe)?(\s+\S+)*\s+[-/](c|command|e|ec|enc|encodedcommand)(\s|$)
+#   where OPTS is (\s+-\S*)*\s+ (zero or more option tokens). re.ASCII: like grep in the C locale, \s is ASCII whitespace
+#   only and case folding is ASCII only.
+# Matching runs on the line with ASCII letters lowered (the same positions), which is what IGNORECASE does with re.ASCII,
+#   so the patterns below are lowercase and need no IGNORECASE. A pattern starts with a literal where it can (the
+#   boundary (^|[\s"/]) before it is a negative lookbehind after it), which lets the regex engine skip ahead quickly.
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+_NB = r'[^\s"/]'  # a character that is not a boundary (a head starts at the line start or after whitespace, " or /)
+_MCP_SIMPLE = tuple(re.compile(p, re.ASCII) for p in (
+    r'base64',
+    r'(?:curl(?<!' + _NB + r'curl)|wget(?<!' + _NB + r'wget))(?=[\s"]|$)',
+    r'deno(?<!' + _NB + r'deno)(?:\.exe)?\s+eval(?=\s|$)',
+    r'cmd(?<!' + _NB + r'cmd)(?:\.exe)?\s+/[ck](?=\s|$)',
+))
+# The OPTS branches: (head, flag). A head is followed by whitespace. The option tokens after it form a run of
+#   whitespace-separated tokens that start with "-" (\S* cannot stop before the whitespace the next \s+ needs), and the
+#   flag is one whole token of that run (node: it may go on with "=" and more). So a branch matches exactly when some
+#   head has a flag token inside the maximal run of "-" tokens that follows it. The run is matched possessively, and a
+#   head inside the run of an earlier head is skipped (its run ends at the same place and holds fewer tokens), so every
+#   branch is a constant number of linear passes. The flag patterns are written so that a long token cannot make them
+#   backtrack (a lookahead or a lookbehind instead of [a-z]*c[a-z]*)
+_B = r'(?:^|(?<=[\s"/]))'
+# A head is searched only where an option token follows it (\s+-): a branch never matches with an empty run
+_MCP_OPTS_BRANCHES = tuple((re.compile(_B + h + r'(?=\s+-)', re.ASCII), re.compile(f, re.ASCII)) for h, f in (
+    (r'(ba|z|da|k|a|fi)?sh(\.exe)?', r'-(?<=\s-)(?=[a-z]*c)[a-z]++(?=\s|$)'),  # -[a-z]*c[a-z]*(\s|$)
+    (r'(node|nodejs|bun)(\.exe)?', r'-(?<=\s-)(e|-eval|p|-print)(?=[\s=]|$)'),
+    (r'python[0-9.]*(\.exe)?', r'-(?<=\s-)[a-z]*+(?<=c)(?=\s|$)'),  # -[a-z]*c(\s|$)
+    (r'(perl|ruby)[0-9.]*(\.exe)?', r'-(?<=\s-)[a-z]*+(?<=e)(?=\s|$)'),  # -[a-z]*e(\s|$)
+    (r'php[0-9.]*(\.exe)?', r'-(?<=\s-)r(?=\s|$)'),
+    (r'(osascript|lua[0-9.]*)', r'-(?<=\s-)e(?=\s|$)'),
+))
+# Literal parts every head of a branch contains (a branch whose literal is missing is not searched)
+_MCP_OPTS_LITERALS = (("sh",), ("node", "bun"), ("python",), ("perl", "ruby"), ("php",), ("osascript", "lua"))
+_OPT_RUN = re.compile(r'(?:\s+-\S*+)*+', re.ASCII)
+# ZES branch (pwsh|powershell)(\.exe)?(\s+\S+)*\s+[-/](c|command|...)(\s|$), split in two: (\s+\S+)*\s+ is any text that starts
+#   and ends with whitespace, so the branch matches exactly when the first head followed by whitespace has a flag (with its
+#   leading whitespace) after it
+_PWSH_HEAD = re.compile(r'(?:pwsh(?<!' + _NB + r'pwsh)|powershell(?<!' + _NB + r'powershell))(\.exe)?(?=\s)', re.ASCII)
+_PWSH_FLAG = re.compile(r'\s[-/](c|command|e|ec|enc|encodedcommand)(\s|$)', re.ASCII)
+
+
+def _mcp_opts_match(low: str) -> bool:
+    for (head, flag), lits in zip(_MCP_OPTS_BRANCHES, _MCP_OPTS_LITERALS):
+        if not any(x in low for x in lits):
+            continue
+        run_end = -1
+        for h in head.finditer(low):
+            if h.start() < run_end:
+                continue
+            run_end = _OPT_RUN.match(low, h.end()).end()
+            if flag.search(low, h.end(), run_end):
+                return True
+    return False
 
 
 def mcp_danger(line: str) -> bool:
-    """True if one line of an MCP command matches ZES's MCP_DANGER_RE."""
-    if MCP_DANGER.search(line):
+    """True if one line of an MCP command matches ZES's MCP_DANGER_RE (above)."""
+    low = line.translate(_ASCII_LOWER)
+    if any(p.search(low) for p in _MCP_SIMPLE) or _mcp_opts_match(low):
         return True
-    h = _PWSH_HEAD.search(line)
-    return h is not None and _PWSH_FLAG.search(line, h.end()) is not None
+    h = _PWSH_HEAD.search(low)
+    return h is not None and _PWSH_FLAG.search(low, h.end()) is not None
 
 
 # A hook runs a script in the working tree (node .claude/setup.mjs and so on)
@@ -108,7 +181,7 @@ def _commands(obj):
 
 
 def dangerous_hook(value) -> bool:
-    return any(DANGEROUS_CMD.search(c) or LOCAL_SCRIPT.match(c) for c in _commands(value))
+    return any(dangerous_cmd(c) or LOCAL_SCRIPT.match(c) for c in _commands(value))
 
 
 # --- JSON H (edit_json / disable_mcp_server) ----------------------------------------------------

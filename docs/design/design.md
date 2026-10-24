@@ -251,6 +251,8 @@ Approvers approve "the exact bytes after the change" (`expected_after_sha256`) a
 | remove_line | `sh.ld_preload` / `sh.curl_pipe_sh` / `sh.base64_pipe_sh` / `sh.histfile_null` (shell rc), `git.exec_key` (`fsmonitor` / `sshCommand` / `hooksPath`), `php.auto_prepend`, `ldso.entry`, `cron.fetch_exec` (`/etc/cron.d/*`). The whole line must match | — |
 | quarantine | The finding's target itself, or a target derived by a relation of §10.3 | — |
 
+`MCP_DANGER` and the hook pattern `DANGEROUS_CMD` are matched by linear-time scanners (`hazards.mcp_danger` / `hazards.dangerous_cmd`; round 5), since a file of up to 1 MB from the scanned tree is matched: a head, the maximal run of `-` tokens after it (possessive), and flags written so they cannot backtrack. They give the same result as the regular expressions (kept in the comments and in `tests/test_hazards.py`, which compares them on a random corpus), so the table version does not change.
+
 Anything not in the table (`permissions.deny`, `ignore-scripts=true` in `.npmrc`, `disable_functions` and so on) cannot be removed. T-3 is checked with `json.loads` for JSON, with `json.loads` after removing comments and trailing commas by a separate path for JSONC, with `tomllib` for TOML, and for text by checking that the bytes other than the removed lines match. It is checked on both dry-run and apply.
 
 ### 10.3 Relations and G-9
