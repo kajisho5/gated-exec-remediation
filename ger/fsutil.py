@@ -39,6 +39,13 @@ class FsError(Exception):
 Ident = tuple[int, int, int]
 
 
+def write_all(fd: int, data: bytes) -> None:
+    """os.write that never stops silently halfway: a short write (a nearly full file system or quota) is ENOSPC."""
+    n = os.write(fd, data)
+    if n != len(data):
+        raise OSError(errno.ENOSPC, f"short write ({n} of {len(data)} bytes; the file system may be full)")
+
+
 def ident_of(st: os.stat_result) -> Ident:
     return (st.st_dev, st.st_ino, st.st_ctime_ns)
 
@@ -186,11 +193,18 @@ class TreeInfo:
     kinds: dict  # relative path -> "f" / "d"
 
 
-def tree_hash(dir_fd: int, name: str, root_dev: int | None = None) -> TreeInfo:
+def tree_hash(dir_fd: int, name: str, root_dev: int | None = None, hash_modes: dict | None = None) -> TreeInfo:
     """ger-tree-v1. Entries (the root is ".") sorted in ascending order of the relative path bytes, each line being
     type \\0 relpath \\0 mode(4 octal digits) \\0 (file: size \\0 sha256hex / link: readlink / directory: empty) \\n
     and the SHA-256 of their concatenation. mtime / ctime / uid are not included.
-    Rejects exceeding the entry count or total size limit, FIFOs, sockets, devices, a different st_dev, and regular files with st_nlink > 1."""
+    Rejects exceeding the entry count or total size limit, FIFOs, sockets, devices, a different st_dev, and regular files with st_nlink > 1.
+    hash_modes (relative path -> (allowed modes, mode)): a member whose mode is one of the allowed ones is hashed with
+    mode instead (ger restore: a tree whose modes were restored only partly by an interrupted restore hashes like the
+    original). The returned modes are the real ones."""
+    def hm(rel: str, mode: int) -> bytes:
+        if hash_modes is not None and rel in hash_modes and mode in hash_modes[rel][0]:
+            mode = hash_modes[rel][1]
+        return f"{mode & 0o7777:04o}".encode()
     lines: list[tuple[bytes, bytes]] = []
     modes: dict = {}
     kinds: dict = {}
@@ -201,7 +215,7 @@ def tree_hash(dir_fd: int, name: str, root_dev: int | None = None) -> TreeInfo:
         dev = st0.st_dev if root_dev is None else root_dev
         if st0.st_dev != dev:
             raise FsError("the tree is on a different device")
-        lines.append((b".", b"d\0.\0" + f"{st0.st_mode & 0o7777:04o}".encode() + b"\0\n"))
+        lines.append((b".", b"d\0.\0" + hm(".", st0.st_mode & 0o7777) + b"\0\n"))
         modes["."] = st0.st_mode & 0o7777
         kinds["."] = "d"
         stack: list[tuple[int, bytes, int]] = [(top, b"", 0)]
@@ -218,7 +232,7 @@ def tree_hash(dir_fd: int, name: str, root_dev: int | None = None) -> TreeInfo:
                     raise FsError(f"the tree contains a mount boundary (a different device): {rel_s}")
                 if len(lines) >= TREE_MAX_ENTRIES:
                     raise FsError(f"the tree has too many entries (limit {TREE_MAX_ENTRIES})")
-                m = f"{st.st_mode & 0o7777:04o}".encode()
+                m = f"{st.st_mode & 0o7777:04o}".encode() if stat.S_ISLNK(st.st_mode) else hm(rel_s, st.st_mode & 0o7777)
                 if stat.S_ISLNK(st.st_mode):
                     lines.append((rel_b, b"l\0" + rel_b + b"\0" + m + b"\0" + os.fsencode(os.readlink(n, dir_fd=dfd)) + b"\n"))
                 elif stat.S_ISREG(st.st_mode):
