@@ -19,7 +19,7 @@ from .core import VERSION, parse_ts
 
 _configured: dict[str, str] = {}
 # Audit log results that show an apply got as far as changing targets (they mark the dry-run record as used)
-EXECUTED_RESULTS = ("ok", "rolled_back", "rollback_failed", "applied_unlogged")
+EXECUTED_RESULTS = ("ok", "rolled_back", "rollback_failed", "applied_unlogged", "journal_failed")
 # result of the record an apply appends before its first change (it uses up the dry-run record even if the process is killed)
 STARTED = "started"
 

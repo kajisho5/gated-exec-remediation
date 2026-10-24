@@ -14,6 +14,7 @@ The file before restoring (the edited version) is kept in the quarantine store (
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 
 from . import fsutil, store
@@ -63,50 +64,114 @@ def check_request(req, operator: str, now: dt.datetime, approval_max_age: int) -
 
 
 class RestoreStep:
-    def __init__(self, qid: str, manifest: dict, mhash: str):
-        self.qid, self.m, self.mhash = qid, manifest, mhash
+    """One entry. state: "pending" (to restore), "moved" (an interrupted restore already moved it back but was killed
+    before it wrote restored.json), "done" (restored.json of this restore_id exists: a retry skips it); during apply
+    also "unlocked" / "linked" (the progress used by rollback)."""
+
+    def __init__(self, qid: str, manifest: dict, mhash: str, restore_id: str | None = None):
+        self.qid, self.m, self.mhash, self.restore_id = qid, manifest, mhash, restore_id
         self.state = "pending"
+        self.linked = False  # edit_backup: the "replaced" link of an interrupted restore is already there
 
     @property
     def target(self):
         return self.m["original_path"]
 
+    def _payload_hash(self, efd: int, pst) -> str:
+        """Hash of the quarantined object as the manifest's "hash" (before quarantine) or "locked_hash" means it."""
+        m = self.m
+        k = m["kind"]
+        if k == "file":
+            return fsutil.hash_file(efd, "payload", pst)
+        if k == "tree":
+            orig, kinds = m.get("tree_modes"), m.get("tree_kinds")
+            if isinstance(orig, dict) and isinstance(kinds, dict) and set(orig) <= set(kinds):
+                # Each member may have its locked mode or its original one (an interrupted restore sets the original
+                #   modes before the rename, member by member); the content and the structure must be the original
+                locked = fsutil.locked_modes(kinds)
+                hm = {rel: ({mode, locked.get(rel, mode)}, mode) for rel, mode in orig.items()}
+                return fsutil.tree_hash(efd, "payload", pst.st_dev, hash_modes=hm).hash
+            return fsutil.tree_hash(efd, "payload", pst.st_dev).hash
+        return "link:" + fsutil.readlink(efd, "payload")
+
+    def _back_in_place(self, efd: int) -> bool:
+        """True if the object GER quarantined (or the backup of an edit) is at its original location again, by a rename
+        of an interrupted restore of GER (the same i-node; for an edit, with the edited file kept as "replaced")."""
+        m = self.m
+        res = fsutil.resolve(m["original_path"], must_exist=False)
+        try:
+            if res.st is None or [res.st.st_dev, res.st.st_ino] != list(m["ident"]):
+                return False
+        finally:
+            res.close()
+        if m["operation"] == "edit_backup":
+            try:
+                os.stat("replaced", dir_fd=efd, follow_symlinks=False)
+            except FileNotFoundError:
+                return False
+        return True
+
     def check(self) -> None:
         m = self.m
         if m.get("schema") != "ger-quarantine-manifest/1" or m.get("quarantine_id") != self.qid:
             raise ActionError("invalid manifest format")
+        if m.get("operation") not in ("quarantine", "edit_backup"):
+            raise ActionError(f"unknown operation: {m.get('operation')}")
         from .gates import protected_reason
         why = protected_reason(m["original_path"])
         if why:
             raise ActionError(f"G-9: the restore destination is protected ({why})")
         efd = store.open_entry(self.qid)
         try:
-            for marker in ("restored.json",):
+            try:
+                raw = fsutil.read_file(efd, "restored.json", limit=1 << 16)
+            except FileNotFoundError:
+                raw = None
+            if raw is not None:
                 try:
-                    os.stat(marker, dir_fd=efd, follow_symlinks=False)
-                    raise ActionError("this entry was already restored")
+                    rid = json.loads(raw.decode("utf-8")).get("restore_id")
+                except (ValueError, UnicodeDecodeError, AttributeError):
+                    rid = None  # Cut off by a kill while this record was written
+                if (rid == self.restore_id or rid is None) and self._back_in_place(efd):
+                    self.state = "done"
+                    return
+                raise ActionError("this entry was already restored")
+            try:
+                pst = os.stat("payload", dir_fd=efd, follow_symlinks=False)
+            except FileNotFoundError:
+                try:
+                    os.stat("rolled_back.json", dir_fd=efd, follow_symlinks=False)
+                    raise ActionError("this entry was rolled back (the object is already at its original location)") from None
                 except FileNotFoundError:
                     pass
-            pst = os.stat("payload", dir_fd=efd, follow_symlinks=False)
+                if self._back_in_place(efd):
+                    self.state = "moved"
+                    return
+                raise ActionError("the quarantined object is neither in the quarantine store nor back at its original "
+                                  "location") from None
             if [pst.st_dev, pst.st_ino] != list(m["ident"]):
                 raise ActionError("the content of the quarantine store does not match the object at quarantine time")
             if m["operation"] == "quarantine":
-                k = m["kind"]
-                if fsutil.kind_of(pst) != k:
+                if fsutil.kind_of(pst) != m["kind"]:
                     raise ActionError("the type of the quarantine store content does not match the manifest")
-                if k == "file":
-                    got = fsutil.hash_file(efd, "payload", pst)
-                elif k == "tree":
-                    got = fsutil.tree_hash(efd, "payload", pst.st_dev).hash
-                else:
-                    got = "link:" + fsutil.readlink(efd, "payload")
-                if got != m.get("locked_hash", m["hash"]):
+                got = self._payload_hash(efd, pst)
+                if got not in (m["hash"], m.get("locked_hash", m["hash"])):
                     raise ActionError("the content of the quarantine store does not match the manifest hash (possible tampering)")
-            elif m["operation"] == "edit_backup":
+            else:
                 if fsutil.hash_file(efd, "payload", pst) != m["hash"]:
                     raise ActionError("the backup content does not match the manifest hash (possible tampering)")
-            else:
-                raise ActionError(f"unknown operation: {m['operation']}")
+                try:
+                    rst = os.stat("replaced", dir_fd=efd, follow_symlinks=False)
+                except FileNotFoundError:
+                    rst = None
+                if rst is not None:  # Linked by an interrupted restore: it must be a second name of the current file
+                    cur = fsutil.resolve(m["original_path"], must_exist=False)
+                    try:
+                        if cur.st is None or (rst.st_dev, rst.st_ino) != (cur.st.st_dev, cur.st.st_ino):
+                            raise ActionError("the quarantine store entry holds a \"replaced\" file that is not the edited file")
+                    finally:
+                        cur.close()
+                    self.linked = True
         finally:
             os.close(efd)
         res = fsutil.resolve(m["original_path"], must_exist=False)
@@ -125,6 +190,8 @@ class RestoreStep:
             res.close()
 
     def apply(self) -> None:
+        if self.state in ("moved", "done"):
+            return  # Already back (an interrupted restore of this request)
         m = self.m
         efd = store.open_entry(self.qid)
         try:
@@ -145,7 +212,8 @@ class RestoreStep:
                     cur = res.lstat()
                     if fsutil.hash_file(res.parent_fd, res.name, cur) != m["after_sha256"]:
                         raise ActionError("the edited file changed")
-                    os.link(res.name, "replaced", src_dir_fd=res.parent_fd, dst_dir_fd=efd, follow_symlinks=False)
+                    if not self.linked:
+                        os.link(res.name, "replaced", src_dir_fd=res.parent_fd, dst_dir_fd=efd, follow_symlinks=False)
                     self.state = "linked"
                     base.unlock_payload(efd, "file", m["mode"], None)
                     os.rename("payload", res.name, src_dir_fd=efd, dst_dir_fd=res.parent_fd)
@@ -169,8 +237,18 @@ class RestoreStep:
                     os.rename(res.name, "payload", src_dir_fd=res.parent_fd, dst_dir_fd=efd)
                     if m["operation"] == "edit_backup":
                         os.rename("replaced", res.name, src_dir_fd=efd, dst_dir_fd=res.parent_fd)
-                    self.state = "unlocked" if m["operation"] == "quarantine" else "linked"
-                if self.state in ("unlocked", "linked"):
+                    self.state = "unlocked" if m["operation"] == "quarantine" else "relocked"
+                elif self.state == "linked":
+                    # The edited file is still in place: drop the second name "replaced" (the file keeps st_nlink 1)
+                    try:
+                        rst = os.stat("replaced", dir_fd=efd, follow_symlinks=False)
+                        cur = os.stat(res.name, dir_fd=res.parent_fd, follow_symlinks=False)
+                        if (rst.st_dev, rst.st_ino) == (cur.st_dev, cur.st_ino):
+                            os.unlink("replaced", dir_fd=efd)
+                    except FileNotFoundError:
+                        pass
+                    self.linked = False
+                if self.state in ("unlocked", "linked", "relocked"):
                     if m["operation"] == "quarantine" and m["kind"] == "tree":
                         base.lock_payload(efd, "tree", m["tree_kinds"])
                     elif m["kind"] == "file":
@@ -182,6 +260,8 @@ class RestoreStep:
             os.close(efd)
 
     def commit(self, restore_id: str, at: str) -> None:
+        if self.state == "done":
+            return
         efd = store.open_entry(self.qid)
         try:
             store.write_json_excl(efd, "restored.json", {"restore_id": restore_id, "restored_at": at})
@@ -197,7 +277,7 @@ def prepare(req: dict) -> tuple[list[RestoreStep], list[Rejection]]:
             m, h = store.read_manifest(qid)
             if h != e["manifest_sha256"]:
                 raise ActionError("the SHA-256 of the manifest does not match the restore-request")
-            s = RestoreStep(qid, m, h)
+            s = RestoreStep(qid, m, h, req.get("restore_id"))
             s.check()
             steps.append(s)
         except FileNotFoundError:
@@ -218,15 +298,22 @@ def prepare(req: dict) -> tuple[list[RestoreStep], list[Rejection]]:
 
 
 def run(steps: list[RestoreStep], restore_id: str, at: str) -> tuple[list[dict], bool]:
-    """(results, ok). If something fails halfway, restored objects are quarantined again."""
+    """(results, ok). If something fails halfway, restored objects are quarantined again.
+
+    A retry of a restore that was killed finishes it: entries the killed run already moved back are recognized
+    ("moved", recorded now) and entries it already recorded are skipped ("done")."""
     done = []
     results = []
     failed = None
     for s in steps:
+        if s.state == "done":
+            results.append(_res(s, "skipped", "already_restored"))
+            continue
+        was = s.state
         try:
             s.apply()
             done.append(s)
-            results.append(_res(s, "applied", "ok", at))
+            results.append(_res(s, "applied", "ok" if was == "pending" else "ok:completed_interrupted_restore", at))
         except Exception as e:
             try:
                 s.rollback()
@@ -263,4 +350,6 @@ def _res(s: RestoreStep, result: str, reason: str, at=None) -> dict:
 
 
 def dry_run(steps: list[RestoreStep]) -> list[dict]:
-    return [_res(s, "skipped", "dry_run:would_restore") for s in steps]
+    why = {"pending": "dry_run:would_restore", "moved": "dry_run:would_record_interrupted_restore",
+           "done": "already_restored"}
+    return [_res(s, "skipped", why[s.state]) for s in steps]

@@ -53,7 +53,7 @@ bin/ger recover ger-input.apply.json --operator <name> -o recover-log.json
 ```
 
 - A dry-run record is used up by one apply, even one that was killed. To apply again, start again from the dry-run
-- After an apply was killed or ended with exit code 5, run `ger recover` before anything else: dry-run and apply are refused (G-8) while its journal is open. If recover cannot close the journal (exit code 5), hand it to a human; do not move journal files yourself
+- After an apply was killed or ended with exit code 5, run `ger recover` before anything else: dry-run and apply are refused (G-8) while its journal is open. If recover cannot close the journal (exit code 5), hand it to a human; do not move journal files yourself. An apply that stops because its journal could not be written ("the journal could not be written", exit code 5) has already rolled back; free space (ask a human), then run `ger recover` with the same input. A killed `ger restore` is retried with the same restore-request
 - An approval expires 7 days after `approved_at` (`GER_APPROVAL_MAX_AGE`), and a plan past the latest remediate `due_at` is not executed either. Redo ZET and the approval
 - A plan made by ZET with `--now` (`now_override: true`) is not executed (for tests only)
 

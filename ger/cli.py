@@ -248,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.now:  # A dry-run record made with --now never justifies an apply without --now (G-8)
         record["now_override"] = True
     st = {"code": EXIT_OK, "rejections": [], "log_obj": None, "changed": False, "outcome": None, "result": None,
-          "out_obj": None}
+          "out_obj": None, "msg": None}
     try:
         inp = load_json(args.input)
     except (OSError, ValueError) as e:
@@ -314,8 +314,8 @@ def _finish(args, record: dict, st: dict, clock) -> int:
         return EXIT_ROLLBACK_FAILED if mutating and code not in (EXIT_REJECTED, EXIT_USAGE) else EXIT_USAGE  # 64: nothing changed
     if unlogged:
         return code  # The failure to write remediation-log was already shown
-    msg = {EXIT_OK: "OK", EXIT_ROLLED_BACK: "failed; everything was rolled back",
-           EXIT_ROLLBACK_FAILED: "failed, and the rollback could not be completed. Check remediation-log and resolve this by hand"}.get(code)
+    msg = st.get("msg") or {EXIT_OK: "OK", EXIT_ROLLED_BACK: "failed; everything was rolled back",
+                            EXIT_ROLLBACK_FAILED: "failed, and the rollback could not be completed. Check remediation-log and resolve this by hand"}.get(code)
     if msg:
         _err(f"ger {args.command}: {msg}")
     return code
@@ -354,6 +354,9 @@ def _cmd_plan(args, inp, now, clock, ttl, max_age, record, st, pool):
         run_id = store.new_run_id(clock())
         start = {k: v for k, v in record.items() if k in ("command", "operator", "started_at", "now_override", "plan_id",
                                                            "plan_hash", "input_hash")}
+        # The targets let ger recover tell whether this run touched the targets of an older open journal (per target)
+        #   (a checklist changes nothing, so it touches no target)
+        start["targets"] = sorted({s.target for s in steps if isinstance(s.target, str) and s.type != "checklist"})
         try:
             audit.consume_dry_run(dict(start, run_id=run_id), record["plan_hash"], record["input_hash"], now, ttl,
                                   bool(args.now))
@@ -372,6 +375,13 @@ def _cmd_plan(args, inp, now, clock, ttl, max_age, record, st, pool):
         st.update(outcome=outcome, changed=outcome in (None, executor.ROLLBACK_FAILED),
                   log_obj=_log(inp, "apply", record["started_at"], clock(), results, status),
                   code={None: EXIT_OK, executor.ROLLED_BACK: EXIT_ROLLED_BACK}.get(outcome, EXIT_ROLLBACK_FAILED))
+        if outcome == executor.JOURNAL_FAILED:
+            # Exit 5: the journal may still look unfinished (its last records could not be written), so ger recover is
+            #   part of the way back even though nothing GER changed is left in place
+            st.update(result="journal_failed", msg=(
+                "failed: the journal could not be written (the file system may be full). GER stopped before the next "
+                "change and rolled back what it had changed. Free space, then run ger recover with the same input: it "
+                "closes the journal if it is still open (there is nothing left to undo)"))
         record["items"] = [_audit_item(s, r) for s in steps for r in results if r["finding_id"] in s.finding_ids
                            and r["action_type"] == s.type][:512]
         if outcome is None:
@@ -584,7 +594,7 @@ def _cmd_recover(args, inp, now, clock, ttl, max_age, record, st, pool):
     results, failed = [], False
     found = 0
     audit_recs = audit.records()
-    for run_id, recs in store.open_journals():
+    for run_id, recs, damaged in store.open_journals():
         head = recs[0] if recs else {}
         if head.get("plan_hash") != ph or head.get("input_hash") != ih:
             continue
@@ -592,32 +602,64 @@ def _cmd_recover(args, inp, now, clock, ttl, max_age, record, st, pool):
         last: dict[int, dict] = {}
         undone = set()
         for r in recs:
-            if r.get("event") == "step":
+            if r.get("event") == "step" and isinstance(r.get("step"), int) and isinstance(r.get("undo"), dict):
                 last[r["step"]] = r["undo"]
             elif r.get("event") == "step_rolled_back":
-                undone.add(r["step"])
-        hsteps = head.get("steps") or []
+                undone.add(r.get("step"))
+        hsteps = head.get("steps") if isinstance(head.get("steps"), list) else []
         todo = [(n, last[n]) for n in sorted(last, reverse=True) if n not in undone]
 
         def res(n, result, reason, at=None):
-            h = hsteps[n] if n < len(hsteps) and isinstance(hsteps[n], dict) else {}
+            h = hsteps[n] if 0 <= n < len(hsteps) and isinstance(hsteps[n], dict) else {}
             return {"finding_id": (h.get("finding_ids") or ["sha256:" + "0" * 64])[0], "action_type": "recover",
                     "target": h.get("target"), "before": None, "after": None, "result": result, "reason": reason,
                     "applied_at": at}
-        later = _superseding_run(run_id, head, audit_recs)
-        if later is not None:
-            # Another run changed targets after this one stopped (for example an apply by an earlier GER, which did not refuse
-            # to start while this journal was open). Replaying the journal now would undo changes that run made or confirmed
-            # (already_compliant), so it is closed without replaying anything; the targets keep their current state
-            by = f"{later.get('command')} {later.get('run_id') or ''} started {later.get('started_at')}".replace("  ", " ")
-            _err(f"ger recover: not replaying journal {run_id}: {by} ran after it, so its changes were superseded. "
-                 "Nothing was rolled back; run dry-run and apply again to finish the plan")
-            store.append_journal(run_id, {"event": "superseded", "operator": args.operator, "by": by})
-            results += [res(n, "skipped", f"superseded:{run_id}") for n, _u in todo]
+
+        def refuse(why, per_step):
+            _err(f"ger recover: journal {run_id} {why} (nothing was rolled back; the journal stays open)")
+            return [res(n, "failed", per_step(n)) for n, _u in todo]
+        if damaged is not None:
+            # A line in the middle cannot be read: what it said (and what was changed after it) is unknown
+            failed = True
+            results += refuse(f"is damaged (line {damaged} cannot be read), so it is not replayed. Check its targets by hand, "
+                              "then move the journal out of the journal directory of the quarantine store",
+                              lambda n: f"not replayed: the journal is damaged at line {damaged}")
             continue
+        later = _later_runs(run_id, head, audit_recs)
+        if later is None:
+            failed = True
+            results += refuse("was written by an earlier GER (no start record), and the audit log has no dry-run record of "
+                              "its plan and input, so its place in the log cannot be established and a later run on the same "
+                              "targets cannot be ruled out. It is not replayed. Check its targets by hand, then move the "
+                              "journal out of the journal directory of the quarantine store",
+                              lambda n: "not replayed: the order of this run in the audit log cannot be established")
+            continue
+        # A later apply or restore that touched a target of a step took that target over (for example an apply by an
+        #   earlier GER, which did not refuse to start while this journal was open, or a restore). Replaying that step
+        #   would undo what the later run did or confirmed (already_compliant), so it is skipped and the target keeps its
+        #   current state. Steps on other targets are rolled back as usual
+        sup = {}
+        for n, u in todo:
+            paths = _step_paths(hsteps[n] if 0 <= n < len(hsteps) and isinstance(hsteps[n], dict) else {}, u)
+            for r, targets in later:
+                if targets is None or any(_overlaps(p, t) for p in paths for t in targets):
+                    sup[n] = f"{r.get('command')} {r.get('run_id') or ''} started {r.get('started_at')}".replace("  ", " ")
+                    break
+        replay = [(n, u) for n, u in todo if n not in sup]
+        for n, u in todo:
+            if n in sup:
+                try:  # The leftovers of a kill point (temporary file, a second name of the target in the store)
+                    base_mod.clean_leftovers(u)
+                except Exception as e:  # noqa: BLE001 (reported; the step is still not replayed)
+                    _err(f"ger recover: cannot clean up the leftovers of step {n} of journal {run_id}: {type(e).__name__}: {e}")
+        if sup:
+            bys = sorted(set(sup.values()))
+            _err(f"ger recover: journal {run_id}: not replaying {len(sup)} of {len(todo)} steps, because "
+                 f"{'; '.join(bys)} ran after it on the same targets, so their changes were superseded. Those targets keep "
+                 "their current state; run dry-run and apply again to finish the plan")
         # Check every step before undoing any of them, so a recover never leaves a mixture of undone and kept changes
         problems = []
-        for n, u in todo:
+        for n, u in replay:
             try:
                 (chmod_mod.check_undo if u.get("op") == "chmod" else base_mod.check_undo)(u)
             except Exception as e:
@@ -626,25 +668,41 @@ def _cmd_recover(args, inp, now, clock, ttl, max_age, record, st, pool):
             failed = True
             bad = dict(problems)
             _err(f"ger recover: journal {run_id} cannot be replayed safely (nothing was rolled back; the journal stays open)")
-            results += [res(n, "failed", f"not replayed: {bad[n]}" if n in bad else "not replayed: another step cannot be undone")
+            results += [res(n, "skipped", f"superseded:{run_id}") if n in sup else
+                        res(n, "failed", f"not replayed: {bad[n]}" if n in bad else "not replayed: another step cannot be undone")
                         for n, _u in todo]
             continue
-        jfailed = False
+        jfailed = jlost = False
         for n, u in todo:
+            if n in sup:
+                results.append(res(n, "skipped", f"superseded:{run_id}"))
+                continue
             try:
                 if u.get("op") == "chmod":
                     chmod_mod.rollback_undo(u)
                 else:
                     base_mod.rollback_undo(u)
-                store.append_journal(run_id, {"event": "step_rolled_back", "step": n})
-                results.append(res(n, "rolled_back", f"recovered:{run_id}", fmt_ts(clock())))
             except Exception as e:
                 jfailed = True
                 results.append(res(n, "failed", f"{type(e).__name__}: {e}"))
-        if jfailed:
-            failed = True
-        else:
-            store.append_journal(run_id, {"event": "recovered", "operator": args.operator})
+                continue
+            results.append(res(n, "rolled_back", f"recovered:{run_id}", fmt_ts(clock())))
+            try:
+                store.append_journal(run_id, {"event": "step_rolled_back", "step": n})
+            except store.JournalWriteError:
+                jlost = True  # Undone; the next recover recognizes the step as already undone
+        if not jfailed:
+            event = {"event": "superseded", "by": sorted(set(sup.values()))} if sup and not replay else \
+                {"event": "recovered", **({"superseded_steps": sorted(sup)} if sup else {})}
+            try:
+                store.append_journal(run_id, dict(event, operator=args.operator))
+            except store.JournalWriteError:
+                jlost = True
+        if jlost:
+            _err(f"ger recover: journal {run_id}: the changes were undone, but the journal could not be written (the file "
+                 "system may be full), so it stays open. Free space and run ger recover again: it recognizes the steps it "
+                 "already undid and closes the journal")
+        failed = failed or jfailed or jlost
     if not found:
         _err("ger recover: no unfinished journal for this plan and input")
     st["changed"] = any(r["result"] == "rolled_back" for r in results)
@@ -654,19 +712,61 @@ def _cmd_recover(args, inp, now, clock, ttl, max_age, record, st, pool):
     record["recovered_journals"] = found
 
 
-def _superseding_run(run_id: str, head: dict, recs: list[dict]) -> dict | None:
-    """The first audit record of a run that changed targets after the run of this journal started, or None.
+def _overlaps(a: str, b: str) -> bool:
+    return isinstance(a, str) and isinstance(b, str) and (a == b or a.startswith(b.rstrip("/") + "/")
+                                                          or b.startswith(a.rstrip("/") + "/"))
 
-    The run is found by its start record (run_id). A journal written by an earlier GER has none; then every record that
-    started in or after the second of its run id counts as later, except an apply rollback_failed record of the same plan
-    and input without run_id (that can be the run's own final record). Later runs: apply (started or executed) and restore."""
+
+def _step_paths(hstep: dict, undo: dict) -> set:
+    """The paths a journaled step changed: the step's target, and the targets / original paths of its undo record."""
+    out = {hstep.get("target"), undo.get("target"), undo.get("orig")}
+    out.update(e.get("orig") for e in undo.get("entries") or [] if isinstance(e, dict))
+    return {p for p in out if isinstance(p, str)}
+
+
+def _record_targets(r: dict) -> list | None:
+    """The targets an audit record of an apply or restore names, or None if they are not known (then the record counts
+    as touching every target). A start record of an apply holds them (targets); a final record lists its items (at
+    most 512, so a full list may be cut off); a start record of GER 04e9aea has neither, and the journal of that run
+    (if it had journaled steps) names them."""
+    if isinstance(r.get("targets"), list):
+        return [t for t in r["targets"] if isinstance(t, str)]
+    items = r.get("items")
+    if isinstance(items, list) and len(items) < 512:
+        return [i.get("target") for i in items if isinstance(i, dict) and isinstance(i.get("target"), str)
+                and i.get("type") != "checklist"]
+    rid = r.get("run_id")
+    if isinstance(rid, str) and re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]+", rid):
+        try:
+            with open(os.path.join(store.store_dir(), "journal", rid + ".jsonl"), "rb") as f:
+                recs, _d = store.read_journal(f.read())
+        except OSError:
+            return None
+        steps = recs[0].get("steps") if recs and isinstance(recs[0].get("steps"), list) else None
+        if steps is not None:
+            return [s.get("target") for s in steps if isinstance(s, dict) and isinstance(s.get("target"), str)]
+    return None
+
+
+def _later_runs(run_id: str, head: dict, recs: list[dict]) -> list[tuple[dict, list | None]] | None:
+    """The audit records, in log order, of the runs that may have changed targets after the run of this journal started:
+    (record, its targets or None if unknown). None if the place of this run in the log cannot be established.
+
+    The run is found by its start record (run_id). A journal written by an earlier GER (before 04e9aea) has none; then
+    the run came after a successful dry-run of its plan and input, so every record after the first such dry-run counts
+    as later (log order, never the clock: a clock stepped back must not hide a later apply). If there is no such dry-run,
+    the order is unknown. An apply rollback_failed record of the same plan and input without run_id after that dry-run
+    can be the run's own final record and is not counted. Later runs: apply (started or executed) and restore."""
     idx = next((i for i, r in enumerate(recs) if r.get("command") == "apply" and r.get("run_id") == run_id), None)
     if idx is not None:
         later = recs[idx + 1:]
     else:
-        m = re.fullmatch(r"([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})Z-[0-9a-f]+", run_id)
-        since = f"{m[1]}-{m[2]}-{m[3]}T{m[4]}:{m[5]}:{m[6]}Z" if m else ""
-        later = [r for r in recs if not isinstance(r.get("started_at"), str) or r["started_at"] >= since]
+        anchor = next((i for i, r in enumerate(recs) if r.get("command") == "dry-run" and r.get("result") == "ok"
+                       and r.get("plan_hash") == head.get("plan_hash") and r.get("input_hash") == head.get("input_hash")), None)
+        if anchor is None:
+            return None
+        later = recs[anchor + 1:]
+    out = []
     for r in later:
         if r.get("run_id") == run_id:
             continue
@@ -675,10 +775,10 @@ def _superseding_run(run_id: str, head: dict, recs: list[dict]) -> dict | None:
             if idx is None and "run_id" not in r and result == "rollback_failed" and r.get("plan_hash") == head.get("plan_hash") \
                     and r.get("input_hash") == head.get("input_hash"):
                 continue
-            return r
-        if cmd == "restore-apply" and result in audit.EXECUTED_RESULTS:
-            return r
-    return None
+            out.append((r, _record_targets(r)))
+        elif cmd == "restore-apply" and result in audit.EXECUTED_RESULTS + (audit.STARTED,):
+            out.append((r, _record_targets(r)))
+    return out
 
 
 # --- quarantine-list ----------------------------------------------------------------------------

@@ -93,21 +93,33 @@ def _walk(value, ptr="", depth=0):
             yield from _walk(v, f"{ptr}/{i}", depth + 1)
 
 
-def select_ops(path: str, value, hids) -> list[dict]:
+def select_ops(path: str, value, hids, text: str = "") -> list[dict]:
+    """The ops automatic selection makes for the H ids hids on the parsed file value (text: the file as read)."""
     ops = []
-    for ptr, v in _walk(value):
-        if not ptr:
+    for hid in hids:
+        fpred, rx, vpred, auto, hop = hazards.JSON_H[hid]
+        if not fpred(path):
             continue
-        for hid in hids:
-            fpred, rx, vpred, auto, hop = hazards.JSON_H[hid]
-            if fpred(path) and rx.match(ptr) and vpred(v) and auto(v):
-                o = {"op": hop, "pointer": ptr, "before_sha256": sha256(canonical(v))}
-                if hop == "replace_const":
-                    o["const"] = hazards.JSON_K[hid][0]
-                ops.append(o)
+        if auto is None:  # Selected by the rule of the id over the whole document (claude.hook: the hooks ZES reports)
+            cand = [(p, v) for p, v in ((p, _get(value, p)) for p in hazards.JSON_SELECT[hid](value, text))
+                    if rx.match(p) and vpred(v)]
+        else:
+            cand = [(p, v) for p, v in _walk(value) if p and rx.match(p) and vpred(v) and auto(v)]
+        for ptr, v in cand:
+            o = {"op": hop, "pointer": ptr, "before_sha256": sha256(canonical(v))}
+            if hop == "replace_const":
+                o["const"] = hazards.JSON_K[hid][0]
+            ops.append(o)
     # Drop nested duplicates (a child is not needed when its parent is removed)
     ptrs = [o["pointer"] for o in ops]
     return [o for o in ops if not any(p != o["pointer"] and o["pointer"].startswith(p + "/") for p in ptrs)]
+
+
+def _get(value, ptr: str):
+    for tok in ptr.split("/")[1:]:
+        tok = tok.replace("~1", "/").replace("~0", "~")
+        value = value[int(tok)] if isinstance(value, list) else value[tok]
+    return value
 
 
 def preview_compute(ctx, items, hids, allowed_h=None):
@@ -131,7 +143,7 @@ def preview_compute(ctx, items, hids, allowed_h=None):
             sel = p["select"] if isinstance(p["select"], list) else [p["select"]]
             if any(s not in hazards.JSON_H for s in sel):
                 raise ActionError(f"params.select must be H ids ({', '.join(hazards.JSON_H)})")
-            ops += select_ops(target, value, [s for s in sel if s in hids])
+            ops += select_ops(target, value, [s for s in sel if s in hids], text)
         else:
             for o in p.get("ops", []):
                 if "pointer" not in o:

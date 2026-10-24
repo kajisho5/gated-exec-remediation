@@ -12,7 +12,7 @@ import json
 import posixpath
 import re
 
-HAZARD_VERSION = "ger-hazards-3"
+HAZARD_VERSION = "ger-hazards-4"
 
 # --- Dangerous command detection ---------------------------------------------------------------
 # Every pattern here is matched in linear time: a file of up to EDIT_MAX_BYTES (1 MB) is read, and its content comes from
@@ -20,33 +20,8 @@ HAZARD_VERSION = "ger-hazards-3"
 #   by a fixed tail, so those parts are matched by the token scanners below instead of a regular expression, with the
 #   same result as the regular expressions written in the comments (tests/test_hazards.py compares them on a random corpus).
 #
-# For agent hooks (hooks in .claude/settings.json):
-#   DANGEROUS_CMD = (^|[\s"/])(curl|wget)([\s"]|$)|bash -c|sh -c|powershell(\.exe)? .*-(e|enc|encodedcommand)\s|node -e
-#                   |python[0-9.]* -c|base64          (case-sensitive, Unicode \s, as before)
-_HOOK_SIMPLE = re.compile(r'(^|[\s"/])(curl|wget)([\s"]|$)|bash -c|sh -c|node -e|python[0-9.]* -c|base64')
-_HOOK_PS_HEAD = re.compile(r'powershell(\.exe)? ')
-_HOOK_PS_FLAG = re.compile(r'-(e|enc|encodedcommand)\s')
-
-
-def dangerous_cmd(command: str) -> bool:
-    """True if a hook command matches DANGEROUS_CMD (above)."""
-    if _HOOK_SIMPLE.search(command):
-        return True
-    # powershell(\.exe)? .*-(e|enc|encodedcommand)\s: . does not match a newline, so the flag must start on the line of
-    #   the head (its \s may be that newline). Only the first head of each line matters (a later one sees less of the line)
-    line_end = -1
-    for h in _HOOK_PS_HEAD.finditer(command):
-        if h.start() <= line_end:
-            continue
-        line_end = command.find("\n", h.end())
-        if line_end < 0:
-            line_end = len(command)
-        if _HOOK_PS_FLAG.search(command, h.end(), line_end + 1):
-            return True
-    return False
-
-
-# For MCP server command + args. Copy of MCP_DANGER_RE from ZES §17 (zes-scan.sh; POSIX ERE, case-insensitive, C locale):
+# MCP_DANGER, for MCP server command + args and for agent hooks (below). Copy of MCP_DANGER_RE from ZES §17
+#   (zes-scan.sh; POSIX ERE, case-insensitive, C locale):
 #   If ZES reports HIGH but GER does not match, nothing is found to remove and automatic remediation fails (keep both aligned)
 #     (^|[\s"/])(curl|wget)([\s"]|$)|base64
 #     |(^|[\s"/])(ba|z|da|k|a|fi)?sh(\.exe)?          OPTS -[a-z]*c[a-z]*(\s|$)
@@ -121,10 +96,6 @@ def mcp_danger(line: str) -> bool:
     return h is not None and _PWSH_FLAG.search(low, h.end()) is not None
 
 
-# A hook runs a script in the working tree (node .claude/setup.mjs and so on)
-LOCAL_SCRIPT = re.compile(r'^\s*(node|deno|bun|python[0-9.]*|bash|sh|zsh|ruby|perl)\s+\.{0,2}/?[\w.@-]+(/[\w.@-]+)*\s*$')
-
-
 def _jq_tostring(v) -> str:
     """jq's tostring: a string as it is, anything else as compact JSON."""
     if isinstance(v, str):
@@ -159,29 +130,96 @@ def mcp_cmdline(server, toml: bool = False) -> str | None:
     return f"{_jq_tostring(cmd)} {a}".replace("\0", "")
 
 
-def dangerous_server(server, toml: bool = False) -> bool:
+def _read_last_field(line: str) -> str:
+    """ZES reads each record "format US pointer US line" with bash `IFS=$'\\037' read -r … cmdline`. bash drops one
+    trailing US from the last field when that field holds no other US, so the line ZES matches loses it too."""
+    return line[:-1] if line.endswith("\x1f") and line.count("\x1f") == 1 else line
+
+
+def _cmd_lines(server, toml: bool = False) -> list[str]:
+    """The lines ZES matches for one object with command (command + args split at newlines), or [] without command."""
     c = mcp_cmdline(server, toml)
-    # Like ZES, match each line of the command split at newlines (TOML has none left)
-    return c is not None and any(mcp_danger(line) for line in c.split("\n"))
+    if c is None:
+        return []
+    # Like ZES, each line of the command split at newlines is matched on its own (TOML has none left)
+    return [_read_last_field(line) for line in c.split("\n")] if not toml else [c]
 
 
-def _commands(obj):
-    """Collects every command string in the value (supports nested hooks: hooks[].hooks[].command)."""
-    out = []
-    stack = [obj]
+def dangerous_server(server, toml: bool = False) -> bool:
+    return any(mcp_danger(line) for line in _cmd_lines(server, toml))
+
+
+# --- Agent hooks (claude.hook) ------------------------------------------------------------------
+# GER removes exactly the hook entries /hooks/<Event>/<i> that ZES reports, so a remediated file rescans clean and no
+#   hook ZES did not flag is removed. ZET plans `edit_json select claude.hook` for the §17 agent-hook findings and the §7
+#   campaign-string findings of .claude/settings(.local).json, so an entry is selected when either rule flags it:
+#   - ZES §17 s17.agent_hook, as decided for ZES 0.5.4 (round 6 R6-CLI-1): judged on the parsed document, with keys and
+#     strings decoded (so "hook\u0073" is hooks, and an escaped quote or \u escape inside a command is part of the
+#     string). Entries are the elements of the arrays that are values of the top-level object "hooks" (any event name,
+#     any type). An entry is flagged when
+#     (a) a .command string anywhere inside the entry contains curl, wget, base64, "nc " or /dev/tcp (case-sensitive), or
+#     (b) for some object anywhere inside the entry that has a command key, a line of command + args (built as for an MCP
+#         server: jq tostring, NUL dropped, split at newlines) matches MCP_DANGER (case-insensitive).
+#     ZES 0.5.3 also required a raw-text preselection (the literal "hooks", and a "command": "…curl…" line), which an
+#     escape hid (R6-CLI-1). GER edits only files it can parse, so it never needs ZES's raw-text fallback for files that
+#     do not parse.
+#   - ZES §7 intel.campaign_string (intel_strings with HOOK_PATHS_STR): the text contains a campaign string of
+#     rules/ioc.json intel.strings (grep -F -i, ASCII case folding) and a .command string inside the entry contains it
+#     (jq ascii_downcase). CAMPAIGN_HOOK_STRINGS is a copy of the §7 strings whose file_regex matches .claude/; keep it
+#     in sync with ZES (tests/e2e_hooks.py compares it with ZES's rules/ioc.json).
+#   A script hook such as `node .claude/format.mjs` is removed only when one of these rules flags it.
+_HOOK_ENTRY_CMD = re.compile(r'curl|wget|base64|nc |/dev/tcp')
+CAMPAIGN_HOOK_STRINGS = (
+    "node .claude/setup.mjs",
+    "Miasma: The Spreading Blight",
+    "Shai-Hulud: Here We Go Again",
+    "node .github/setup.js",
+    "MCP_SERVER_PG_TELEMETRY_DISABLE",
+    "Run `node .github/setup.js` to initialize the project environment.",
+    "sckit/xchacha/v1",
+)
+
+
+def _objects(value):
+    """Every object (dict) inside value, value itself included, at any depth (jq `.. | objects`)."""
+    out, stack = [], [value]
     while stack:
         cur = stack.pop()
         if isinstance(cur, dict):
-            if isinstance(cur.get("command"), str):
-                out.append(cur["command"])
+            out.append(cur)
             stack.extend(cur.values())
         elif isinstance(cur, list):
             stack.extend(cur)
     return out
 
 
-def dangerous_hook(value) -> bool:
-    return any(dangerous_cmd(c) or LOCAL_SCRIPT.match(c) for c in _commands(value))
+def hook_entries(doc) -> list[tuple[str, object]]:
+    """(pointer, value) of every hook entry: .hooks? | objects | .[]? | arrays | .[] (ZES HOOK_ENTRY_CMDS)."""
+    hooks = doc.get("hooks") if isinstance(doc, dict) else None
+    if not isinstance(hooks, dict):
+        return []
+    out = []
+    for ev, arr in hooks.items():
+        if isinstance(arr, list):
+            tok = ev.replace("~", "~0").replace("/", "~1")
+            out.extend((f"/hooks/{tok}/{i}", e) for i, e in enumerate(arr))
+    return out
+
+
+def flagged_hooks(doc, text: str) -> list[str]:
+    """Pointers of the hook entries ZES reports (§17 s17.agent_hook or §7 intel.campaign_string), in document order.
+    doc is the parsed file, text the whole file as read (only the §7 rule looks at the raw text, as ZES does)."""
+    low = text.translate(_ASCII_LOWER)
+    camp = [c.translate(_ASCII_LOWER) for c in CAMPAIGN_HOOK_STRINGS if c.translate(_ASCII_LOWER) in low]
+    out = []
+    for ptr, entry in hook_entries(doc):
+        objs = _objects(entry)
+        cmds = [o["command"] for o in objs if isinstance(o.get("command"), str)]
+        if any(_HOOK_ENTRY_CMD.search(c) for c in cmds) \
+                or any(dangerous_server(o) for o in objs if "command" in o) \
+                or any(s in c.translate(_ASCII_LOWER) for s in camp for c in cmds):
+            out.append(ptr)
+    return out
 
 
 # --- JSON H (edit_json / disable_mcp_server) ----------------------------------------------------
@@ -200,6 +238,7 @@ def _is_vscode_tasks(path: str) -> bool:
 
 
 # id -> (file predicate, pointer regular expression, value predicate, auto-selection predicate, operation)
+#   The auto-selection predicate takes the value; None means the id selects with JSON_SELECT[id](document, text)
 JSON_H = {
     "mcp.server": (lambda p: posixpath.basename(p) in MCP_JSON_BASENAMES,
                    re.compile(r"^(/mcpServers/[^/]+|/servers/[^/]+|/projects/[^/]+/mcpServers/[^/]+)$"),
@@ -207,13 +246,16 @@ JSON_H = {
     "npm.lifecycle": (lambda p: posixpath.basename(p) == "package.json",
                       re.compile(r"^/scripts/(" + "|".join(NPM_LIFECYCLE) + r")$"),
                       lambda v: isinstance(v, str), lambda v: True, "remove"),
+    # Automatic selection takes whole entries (/hooks/<Event>/<i>) chosen by flagged_hooks (JSON_SELECT below); a
+    #   nested /hooks/<Event>/<i>/hooks/<j> can only be removed by explicit ops
     "claude.hook": (_is_claude_settings,
-                    re.compile(r"^/hooks/[A-Za-z]+/[0-9]+(/hooks/[0-9]+)?$"),
-                    lambda v: isinstance(v, dict), dangerous_hook, "remove"),
+                    re.compile(r"^/hooks/[^/]*/[0-9]+(/hooks/[0-9]+)?$"),
+                    lambda v: isinstance(v, (dict, list)), None, "remove"),
     "vscode.task_run_on": (_is_vscode_tasks,
                            re.compile(r"^/tasks/[0-9]+/runOptions/runOn$"),
                            lambda v: v == "folderOpen", lambda v: v == "folderOpen", "replace_const"),
 }
+JSON_SELECT = {"claude.hook": flagged_hooks}
 # K: values that replace_const may write (per H id)
 JSON_K = {"vscode.task_run_on": ("default",)}
 # H entries that disable_mcp_server (preset) may use
