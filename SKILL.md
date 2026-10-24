@@ -21,7 +21,7 @@ allowed_actions ─────────────┘
 4. **Never rewrite the plan**: changing even one character of the plan changes `plan_hash` and invalidates the approval (G-3). If a change is needed, start again in ZET. Recomputing `plan_hash` and asking for a new approval is also forbidden (the approval token only shows integrity and cannot detect a rewrite cryptographically; GER checks again the ZET invariants that can be evaluated from the plan alone and accepts only chmod operations that narrow permissions, but do not rely on that).
 5. **Never read or pass findings.json**: the only input of the remediation layer is the finalized plan (G-1).
 6. **Never get around a gate**: when rejected, report the reason (the G number) as it is. Do not try to pass by changing the log directory, the TTL or the location of the quarantine store.
-7. **A preview rejection becomes a checklist**: do not try to pass an automatic remediation rejected by `ger preview` (a dist-info without RECORD, dotted TOML keys, and so on) by writing params by hand. Switch to the checklist of ZET's proposal.
+7. **A preview rejection becomes a checklist**: do not try to pass an automatic remediation rejected by `ger preview` (a dist-info without RECORD, dotted TOML keys, a JSON file GER cannot parse strictly such as one with a duplicate key or a lone `\ud800` escape, an edit that does not remove what its finding reports, and so on) by writing params by hand. Switch to the checklist of ZET's proposal.
 8. **Never delete from the quarantine store**: do not delete or rewrite the contents of `~/.local/state/ger/quarantine` (restore and rollback would become impossible and evidence would be lost). Deletion is a human decision.
 9. **restore also needs human approval**: the AI never writes the approvers (2 or more) of a restore-request.
 10. **Never fake a checklist confirmation**: record `ger confirm` only after the step was actually done, under the name of the worker who did it. For external work such as a rotation, state in the report that GER cannot verify it and records it as `self_attested`.
@@ -53,8 +53,10 @@ bin/ger recover ger-input.apply.json --operator <name> -o recover-log.json
 ```
 
 - A dry-run record is used up by one apply, even one that was killed. To apply again, start again from the dry-run
-- After an apply was killed or ended with exit code 5, run `ger recover` before anything else: dry-run and apply are refused (G-8) while its journal is open. If recover cannot close the journal (exit code 5), hand it to a human; do not move journal files yourself. An apply that stops because its journal could not be written ("the journal could not be written", exit code 5) has already rolled back; free space (ask a human), then run `ger recover` with the same input. A killed `ger restore` is retried with the same restore-request
-- An approval expires 7 days after `approved_at` (`GER_APPROVAL_MAX_AGE`), and a plan past the latest remediate `due_at` is not executed either. Redo ZET and the approval
+- After an apply was killed or ended with exit code 5, run `ger recover` before anything else: dry-run and apply are refused (G-8) while its journal is open. `ger recover` is accepted after the plan's due date and after the approval expired (it only undoes the interrupted apply), so run it even when dry-run reports G-2. If recover cannot close the journal (exit code 5), hand it to a human with design §3.1 "Closing a journal by hand" (bring each target in the journal back to a consistent state, then move the journal file out of `<store>/journal/` and keep it); do not move journal files yourself An apply that stops because its journal could not be written ("the journal could not be written", exit code 5) has already rolled back; free space (ask a human), then run `ger recover` with the same input. A killed `ger restore` is retried with the same restore-request
+- An approval expires 7 days after `approved_at` (`GER_APPROVAL_MAX_AGE`), and a plan past the latest remediate `due_at` is not executed either. Redo ZET and the approval (recover is the exception, see above)
+- G-8 "another ger apply / restore / recover is running": wait until that run has finished, then run the command again (nothing was changed). Do not remove the lock files
+- Exit code 5 with "GER failed after its changes were made": the remediation is in place and recorded as `applied_unverified`; report it to a human with the message, and do not apply again
 - A plan made by ZET with `--now` (`now_override: true`) is not executed (for tests only)
 
 ## Exit codes and reporting
@@ -64,7 +66,7 @@ bin/ger recover ger-input.apply.json --operator <name> -o recover-log.json
 | 0 | Success | Counts of applied / skipped |
 | 3 | Rejected by a gate (nothing changed) | The rejecting G numbers and reasons |
 | 4 | Failed during execution; everything rolled back | The failed target and the reason |
-| 5 | The rollback could not be completed either | **Contact a human immediately.** Pass on the targets and states in remediation-log as they are |
+| 5 | The rollback could not be completed either, the journal could not be written, or GER failed after its changes were made | **Contact a human immediately.** Pass on the targets and states in remediation-log as they are |
 
 ## Gates
 

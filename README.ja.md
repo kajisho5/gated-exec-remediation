@@ -84,7 +84,7 @@ Phase 1 の流れ: `zet draft`（finding ごとに自動の操作とチェック
 | 0 | 成功 |
 | 3 | ゲートで拒否（何も変更していない） |
 | 4 | 実行中に失敗し、全件ロールバック済み |
-| 5 | ロールバックも完了できなかった、または変更を適用したが remediation-log を書けなかった（要手動対応） |
+| 5 | ロールバックも完了できなかった、変更を適用したが remediation-log を書けなかった、または確定の後に GER が失敗した（変更は残る。監査記録の result は `applied_unverified`）（要手動対応） |
 | 64 / 70 | 引数・環境エラー / 内部エラー |
 
 環境変数: `GER_QUARANTINE_DIR`（隔離ストア、既定 `$XDG_STATE_HOME/ger/quarantine` または `~/.local/state/ger/quarantine`）、`GER_LOG_DIR`（監査ログ、既定 `$XDG_STATE_HOME/ger/`。`XDG_STATE_HOME` が未設定なら `~/.local/state/ger/`。起動時に一度だけ実パスへ解決し、ログの読み書きはすべて解決後のパスで行います）、`GER_DRYRUN_TTL`（dry-run 記録の有効秒数、既定 86400、最大 604800）、`GER_APPROVAL_MAX_AGE`（承認の有効秒数。`approved_at` から数え、既定 604800 = 7 日、最大 31622400）。
@@ -127,15 +127,15 @@ Phase 1 の流れ: `zet draft`（finding ごとに自動の操作とチェック
 | # | 拒否する条件 |
 |---|---|
 | G-1 | スキーマ不適合（入力・plan とも strict、版固定。`params` は [schemas/actions.schema.json](schemas/actions.schema.json) と操作ごとの検査に合うこと。plan 1.0 は chmod だけ。plan 1.1 の action は `relation`・`finding_path`・`evidence` を持ち、target を null にできるのはチェックリストだけ。`skillpact_effects` は SkillPact 0.8 の 6 効果のみ）、入力に `findings` がある、mode とコマンドの不一致、remediate の item で `finding_id` が重複（実行結果を item に一意に対応づけられない）、`approved_at` / `created_at` / item の日時が実在しない日時（2 月 30 日、25 時など）、入力 JSON の object でキーが重複・入れ子が 64 段を超える。さらに findings やポリシーが要らない ZET の不変条件（メッセージは `ZET I-n equivalent`）: items と held を通じて finding_id が重複（I-1）、exception に exception_type / reason / recheck_at・承認者が無い、exception 以外に exception_type がある、INFO 以外の defer に reason / recheck_at が無い、判断者が item の承認者に含まれる（I-3）、remediate に owner / due_at / action が無い、remediate 以外に action がある、対象が正規化済みの絶対パスでない（`.` `..` 連続した `/`（先頭の `//` を含む）不可）（I-4）、乖離のある finding が exception（I-5）、item の承認者の重複、diff_anomaly の finding や exec / network / spend / send を宣言したスキルの remediate で item の承認者が 2 名未満（I-6）、署名フィールドがあり乖離のある finding が CRITICAL でない（I-7）、`skillpact_effects` が item の `skillpact.declared_effects` と不一致、decided_at が created_at より前・未来、due_at / recheck_at が decided_at より前（I-9）、partial なのに held が空（I-12） |
-| G-2 | plan.status が ok / partial 以外（draft・error）、plan に `now_override: true`（ZET が `--now` で作成）があり `GER_ALLOW_NOW_OVERRIDE` が `1` でない、現在時刻が remediate の item の `due_at` の最大値を過ぎている（計画の期限切れ。ZET で判断し直す） |
+| G-2 | plan.status が ok / partial 以外（draft・error）、plan に `now_override: true`（ZET が `--now` で作成）があり `GER_ALLOW_NOW_OVERRIDE` が `1` でない、現在時刻が remediate の item の `due_at` の最大値を過ぎている（計画の期限切れ。ZET で判断し直す）。`ger recover` は期限切れでは拒否しない（途中で止まった apply を元に戻すだけ） |
 | G-3 | plan_hash が本体と不一致、approval.plan_id 不一致、approval_token ≠ plan_hash、approved_at が未来または計画作成前、承認が `GER_APPROVAL_MAX_AGE` 秒（既定 7 日）より古い |
 | G-4 | `--operator` が承認者に含まれる（人名は大文字小文字を区別せずに比較） |
 | G-5 | 操作が allowed_actions に無い、または GER 未対応 |
 | G-6 | root が必要な対象、不可逆・破壊的な操作で承認者が 2 名未満（plan 1.1 では item にも 2 名）。reversible / skillpact_effects（[SkillPact](https://github.com/kajisho5/skillpact) の effects）が無い（ZET 確定済みでない）、reversible が操作の性質と不一致、不可逆操作で承認者 2 名未満、危険な効果（exec / network / spend / send）を宣言したスキルへの操作が allowed_actions に明示されていない・承認者 2 名未満（承認者は `approval.approved_by`。大文字小文字だけが異なる名前は同一人物として数える）。ZET の I-6 も item に同じ 2 名を求める |
 | G-7 | 対象が正規化済みの絶対パスでない・存在しない・途中の要素がシンボリックリンクやディレクトリ以外（GER は `/` から 1 要素ずつ `O_PATH\|O_NOFOLLOW\|O_DIRECTORY` でたどり、親の fd を apply まで保持する）・`ger preview` が見たものと違う（`sha256` / `tree_sha256` / `link_target` / `file_sha256` / `before_sha256`、または計算し直した結果が `expected_after_sha256` と違う）・group の外で他の item の対象と重なる・隔離ストアと別のデバイス・ファイルを期待する所でシンボリックリンク・通常ファイル/ディレクトリ以外・所有者でない・監査ログ／監査ログのディレクトリ／それらの上位ディレクトリ（指定された `GER_LOG_DIR` の字句上の上位（途中のシンボリックリンクを置いたディレクトリを含む）と実パスの上位の両方。変更すると GER が記録できなくなる）・計画内で重複（ハードリンクで同じ実体を指す場合を含む）、chmod の mode が `^0[0-7]{3}$` 以外・world-writable・対象の現在の mode に無い権限ビットを足す（修復は権限を絞るだけ）、`action.evidence_hash` があり現在のファイルと一致しない（ZES と同じ規則で計算: 100MB 以下の通常ファイルは内容の SHA-256、100MB 超は `path\|size\|mtime` の SHA-256。ディレクトリは ZES が finding の detail をハッシュするため比べない） |
 | G-9 | 範囲と関係: chmod 以外のファイルを変える操作で `plan.scope` が無い、対象が `scope.roots` / `scope.home` の外、隔離ストアが scope のルート・site-packages・node_modules・`PATH` のディレクトリの下、保護対象（`/` とトップレベルのシステムディレクトリ、`$HOME` そのもの、GER のインストール先、Python の標準ライブラリ、監査ログ、隔離ストア、それらの上位。`/etc` の下は `ld.so.preload`・`hosts`・`cron.d/*` だけ）、root が必要な対象で承認者が 2 名未満・root が必要な対象とそうでない対象が同じ計画にある、`relation` が字句上・ファイルシステム上で成り立たない |
-| G-10 | 定義 T: 取り除く単位が GER の危険パターンの表 H に無い（T-1）、足す値が定数表 K に無い（T-2）、パースし直した結果が「変更前 − 取り除いた単位」と違う（T-3）、ZES が検知するメタデータだけを取り除きコードを残す（Q-6） |
-| G-8 | apply 時に、同一 plan_hash・同一入力（mode 以外）・同じ `--now` の扱いの、未使用の dry-run 成功記録が有効期限内に無い、または監査ログのハッシュチェーンが壊れている（UTF-8 の JSON object として読めない行も壊れているとみなす）。dry-run 記録は、その後に同じ計画・同じ入力で実行まで進んだ apply で使用済みになる（apply は最初の変更の前に開始の記録 `result: "started"` を追記するため、強制終了された apply でも使用済み）。拒否や変更前の引数エラーでは使用済みにならない。verify / dry-run / apply 時に、隔離ストアに未完了のジャーナル（強制終了された apply、ロールバックに失敗した apply）がある場合も拒否する（先にその計画の入力で `ger recover` を実行する）。`ger recover` は後の apply・restore が対象に触れたステップを再生せず、ほかのすべてのステップを正確に元に戻せるときだけ元に戻す。ジャーナルの書き込みに失敗した apply は止まる（終了コード 5）（[設計 §3.1](docs/design/design.ja.md)） |
+| G-10 | 定義 T: 取り除く単位が GER の危険パターンの表 H に無い（T-1）、足す値が定数表 K に無い（T-2）、パースし直した結果が「変更前 − 取り除いた単位」と違う（T-3）、ZES が検知するメタデータだけを取り除きコードを残す（Q-6）、編集が finding の報告する場所（`action.locators`）をすべては取り除かない（その item を applied と記録できない） |
+| G-8 | apply 時に、同一 plan_hash・同一入力（mode 以外）・同じ `--now` の扱いの、未使用の dry-run 成功記録が有効期限内に無い、または監査ログのハッシュチェーンが壊れている（UTF-8 の JSON object として読めない行も壊れているとみなす）。dry-run 記録は、その後に同じ計画・同じ入力で実行まで進んだ apply で使用済みになる（apply は最初の変更の前に開始の記録 `result: "started"` を追記するため、強制終了された apply でも使用済み）。拒否や変更前の引数エラーでは使用済みにならない。verify / dry-run / apply 時に、隔離ストアに未完了のジャーナル（強制終了された apply、ロールバックに失敗した apply）がある場合も拒否する（先にその計画の入力で `ger recover` を実行する）。`ger recover` は後の apply・restore が対象に触れたステップを再生せず、ほかのすべてのステップを正確に元に戻せるときだけ元に戻す。ジャーナルの書き込みに失敗した apply は止まる（終了コード 5）。apply・restore・recover は 1 つずつ実行する。それぞれ実行全体にわたってロックを持ち、1 つ目の実行中の 2 つ目は拒否する（[設計 §3.1](docs/design/design.ja.md)） |
 
 実行中は、事前検証時の実体 ID（`st_dev`・`st_ino`・`st_ctime_ns`）と一致する場合だけ変更します。i-node 番号は削除・再作成で再利用されることがあるため、ctime も含めて同一の実体かを判定しています。
 
@@ -166,7 +166,7 @@ root で実行すると「読めないファイル」のテストは SKIP にな
 
 ## E2E（ZES → ZET → GER → ZES）
 
-`tests/run-e2e.sh` は ZES のフィクスチャ（とそのホーム）を一時ディレクトリに写し、`zes-scan.sh` で検知し（ZES のリポジトリは読むだけ）、`zet draft`、提案の採用（できるものは自動、それ以外はチェックリスト。`ger preview` が拒否したものはチェックリストに切り替える）、`ger preview`、`zet finalize`、承認、`ger dry-run`、`ger apply`、再スキャン、ストアの全エントリの `ger restore`、3 回目のスキャンを行います。合格の条件は、再スキャンで残る finding がチェックリスト・defer・exception・held の item とちょうど一致し、restore 後のスキャンが最初のスキャンと一致する（finding の id も一致する）ことです。
+`tests/run-e2e.sh` は ZES のフィクスチャ（とそのホーム）を一時ディレクトリに写し、`zes-scan.sh` で検知し（ZES のリポジトリは読むだけ）、`zet draft`、提案の採用（できるものは自動、それ以外はチェックリスト。`ger preview` が拒否したものはチェックリストに切り替える）、`ger preview`、`zet finalize`、承認、`ger dry-run`、`ger apply`、再スキャン、ストアの全エントリの `ger restore`、3 回目のスキャンを行います。合格の条件は、再スキャンで残る finding がチェックリスト・defer・exception・held の item（適用した隔離が移した対象の中のものを除く。結果がフィクスチャのファイルの古さに左右されないように）とちょうど一致し、restore 後のスキャンが最初のスキャンと一致する（finding の id も一致する）ことです。
 
 ZES v0.4.0（92be8b7、findings 1.1）と ZET `main` 9792941 での結果（件数は finding の数。「自動」は GER がファイルを変える操作で直し、再スキャンで消えた finding。「チェックリスト」は `pending_manual` の item。「held」は ZES がエラーを出したモジュールの finding。オフラインで省いた §6 と、わざと解析できない入力を置いたモジュール（§21 の YAML のエイリアス、§15 の `bun.lockb`、§49 の壊れた `skill.contract.json` など））:
 
