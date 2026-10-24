@@ -153,21 +153,21 @@ def dangerous_server(server, toml: bool = False) -> bool:
 # GER removes exactly the hook entries /hooks/<Event>/<i> that ZES reports, so a remediated file rescans clean and no
 #   hook ZES did not flag is removed. ZET plans `edit_json select claude.hook` for the §17 agent-hook findings and the §7
 #   campaign-string findings of .claude/settings(.local).json, so an entry is selected when either rule flags it:
-#   - ZES §17 s17.agent_hook (check_s17 with HOOK_ENTRY_CMDS; ui/src/engine/rules/agentConfig.ts). The file is read only
-#     when its text contains "hooks" (in quotes). An entry is flagged when
-#     (a) the file-wide preselection holds (one line of the text matches `"hooks"\s*:` and one matches
-#         `"command"\s*:\s*"[^"]*(curl|wget|base64|nc |/dev/tcp)`, grep -E per line, \s ASCII) and a .command string
-#         anywhere inside the entry contains curl, wget, base64, "nc " or /dev/tcp (case-sensitive, jq test), or
+#   - ZES §17 s17.agent_hook, as decided for ZES 0.5.4 (round 6 R6-CLI-1): judged on the parsed document, with keys and
+#     strings decoded (so "hook\u0073" is hooks, and an escaped quote or \u escape inside a command is part of the
+#     string). Entries are the elements of the arrays that are values of the top-level object "hooks" (any event name,
+#     any type). An entry is flagged when
+#     (a) a .command string anywhere inside the entry contains curl, wget, base64, "nc " or /dev/tcp (case-sensitive), or
 #     (b) for some object anywhere inside the entry that has a command key, a line of command + args (built as for an MCP
 #         server: jq tostring, NUL dropped, split at newlines) matches MCP_DANGER (case-insensitive).
+#     ZES 0.5.3 also required a raw-text preselection (the literal "hooks", and a "command": "…curl…" line), which an
+#     escape hid (R6-CLI-1). GER edits only files it can parse, so it never needs ZES's raw-text fallback for files that
+#     do not parse.
 #   - ZES §7 intel.campaign_string (intel_strings with HOOK_PATHS_STR): the text contains a campaign string of
 #     rules/ioc.json intel.strings (grep -F -i, ASCII case folding) and a .command string inside the entry contains it
 #     (jq ascii_downcase). CAMPAIGN_HOOK_STRINGS is a copy of the §7 strings whose file_regex matches .claude/; keep it
 #     in sync with ZES (tests/e2e_hooks.py compares it with ZES's rules/ioc.json).
-#   Entries are the elements of the arrays that are values of the top-level object "hooks" (any event name, any type).
 #   A script hook such as `node .claude/format.mjs` is removed only when one of these rules flags it.
-_HOOK_GATE_KEY = re.compile(r'"hooks"[ \t\v\f\r]*:')
-_HOOK_GATE_CMD = re.compile(r'"command"[ \t\v\f\r]*:[ \t\v\f\r]*"[^"\n]*(curl|wget|base64|nc |/dev/tcp)')
 _HOOK_ENTRY_CMD = re.compile(r'curl|wget|base64|nc |/dev/tcp')
 CAMPAIGN_HOOK_STRINGS = (
     "node .claude/setup.mjs",
@@ -208,17 +208,14 @@ def hook_entries(doc) -> list[tuple[str, object]]:
 
 def flagged_hooks(doc, text: str) -> list[str]:
     """Pointers of the hook entries ZES reports (§17 s17.agent_hook or §7 intel.campaign_string), in document order.
-    doc is the parsed file, text the whole file as read (the preselections look at the raw text)."""
-    if '"hooks"' not in text:
-        return []
-    gate = _HOOK_GATE_KEY.search(text) is not None and _HOOK_GATE_CMD.search(text) is not None
+    doc is the parsed file, text the whole file as read (only the §7 rule looks at the raw text, as ZES does)."""
     low = text.translate(_ASCII_LOWER)
     camp = [c.translate(_ASCII_LOWER) for c in CAMPAIGN_HOOK_STRINGS if c.translate(_ASCII_LOWER) in low]
     out = []
     for ptr, entry in hook_entries(doc):
         objs = _objects(entry)
         cmds = [o["command"] for o in objs if isinstance(o.get("command"), str)]
-        if (gate and any(_HOOK_ENTRY_CMD.search(c) for c in cmds)) \
+        if any(_HOOK_ENTRY_CMD.search(c) for c in cmds) \
                 or any(dangerous_server(o) for o in objs if "command" in o) \
                 or any(s in c.translate(_ASCII_LOWER) for s in camp for c in cmds):
             out.append(ptr)
